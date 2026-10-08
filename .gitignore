@@ -1,0 +1,24 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+dist/
+build/
+*.egg-info/
+store.db
+.env
+.DS_Store
+
+# --- 运行期状态（宿主生成，不是源码）---------------------------------------
+# config/plugin.toml 由宿主从 config.example.toml 逐字节复制而来，
+# 用户改的是那一份；data/dispatch.jsonl 是本机派发审计日志。都不进仓库。
+config/
+data/
+cache/
+static/cache/
+
+# --- pytest tmp_path 残留目录 ----------------------------------------------
+pytest-cache-files-*/
