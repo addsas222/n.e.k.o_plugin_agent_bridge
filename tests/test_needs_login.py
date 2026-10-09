@@ -87,6 +87,7 @@ def test_answer_mentioning_login_is_not_flagged():
 
 
 @pytest.mark.asyncio
+@pytest.mark.skipif(os.name != "nt", reason="用 cmd.exe 起假 CLI，Windows 专属")
 async def test_healthy_agent_not_misclassified(tmp_path):
     """假 CLI：退出码 0 + stdout 有正文 → ok=True、needs_login=False。"""
     fake = tmp_path / "fakeagent.cmd"
