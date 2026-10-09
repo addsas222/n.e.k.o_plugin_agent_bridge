@@ -371,7 +371,6 @@ def run_subprocess(
     argv: list[str], *, cwd: str | None, timeout: float, max_bytes: int = 400_000
 ) -> dict[str, Any]:
     """跑一个子进程并返回结构化结果（超时按**进程树**清理，截断如实标注）。"""
-    import signal  # noqa: F401 — POSIX 分支里用到（保持 import 位置直观）
     import subprocess
 
     env = {k: v for k, v in os.environ.items() if k not in ENV_STRIP}
