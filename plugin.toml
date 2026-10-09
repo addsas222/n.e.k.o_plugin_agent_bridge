@@ -14,6 +14,27 @@ name = "local"
 recommended = ">=0.1.0,<0.2.0"
 supported = ">=0.1.0,<0.3.0"
 
+# 静态声明入口（只写 id + name，其余元数据仍以 @plugin_entry 装饰器为准）。
+# 宿主重扫插件时只认 plugin.meta.json / 这里的声明来重建入口列表；不写的话
+# 一次 /plugins/refresh 就会把入口清空，面板 action 全部 404。
+# tests/test_manifest_entries.py 校验这里与装饰器保持一致。
+
+[[plugin.entries]]
+id = "agents_list"
+name = "列出可用 Agent"
+
+[[plugin.entries]]
+id = "agent_run"
+name = "派发任务给 Agent"
+
+[[plugin.entries]]
+id = "agent_run_parallel"
+name = "并行派发多个任务"
+
+[[plugin.entries]]
+id = "agent_doctor"
+name = "诊断桥接链路"
+
 [plugin_runtime]
 enabled = true
 auto_start = true
