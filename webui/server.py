@@ -145,6 +145,33 @@ def audit_tail(limit: int) -> list[dict]:
     return out
 
 
+_MATRIX_CACHE: dict[str, tuple[float, int, list[dict]]] = {}
+"""frameworks.toml 的解析缓存：key 是路径，value 是 (mtime, size, 行)。
+
+面板每次请求都要读它，而它只在部署时变。用 mtime+size 判失效，
+比"每次重新 open + tomllib.load"省 60+ 次文件读 —— 66 个 harness 时差别明显。
+"""
+
+
+def _matrix_rows() -> list[dict]:
+    matrix = ROOT / "skill" / "neko-bridge" / "frameworks.toml"
+    if not matrix.is_file():
+        return []
+    try:
+        import tomllib
+    except ModuleNotFoundError:  # pragma: no cover
+        return []
+    stat = matrix.stat()
+    key = str(matrix)
+    cached = _MATRIX_CACHE.get(key)
+    if cached and cached[0] == stat.st_mtime and cached[1] == stat.st_size:
+        return cached[2]
+    with open(matrix, "rb") as handle:
+        rows = tomllib.load(handle).get("harness", [])
+    _MATRIX_CACHE[key] = (stat.st_mtime, stat.st_size, rows)
+    return rows
+
+
 def harness_rows() -> list[dict]:
     """读 frameworks.toml + 探目录，给面板一份「skill 装到哪、MCP 怎么接、缺了怎么装」。
 
@@ -153,15 +180,11 @@ def harness_rows() -> list[dict]:
     面板必须能分开显示，否则「没装」这句话是错的 —— 装的可能是另一个形态。
     没显式写 form 的行按 kind 推导，避免给 59 行都补一个字段。
     """
-    try:
-        import tomllib
-    except ModuleNotFoundError:  # pragma: no cover
+    rows = _matrix_rows()
+    if not rows:
         return []
-    matrix = ROOT / "skill" / "neko-bridge" / "frameworks.toml"
-    if not matrix.is_file():
-        return []
-    with open(matrix, "rb") as handle:
-        rows = tomllib.load(handle).get("harness", [])
+    # 配置只读一次：以前这一行在 66 行的循环里，每个 harness 都重读一遍 config.json
+    harness_dirs = _read_config_raw().get("harness_dirs", {})
     home = Path(os.path.expanduser("~"))
     derived = {"cli": "cli", "ide": "desktop", "desktop": "desktop", "web": "web",
                "server": "server", "generic": "shared"}
@@ -182,7 +205,7 @@ def harness_rows() -> list[dict]:
         )
         if not dirs:
             dirs = [Path(raw)] if raw else []
-        extra = _read_config_raw().get("harness_dirs", {}).get(row["id"])
+        extra = harness_dirs.get(row["id"])
         if extra:
             dirs = [Path(extra), *dirs]
         for directory in dirs:
@@ -246,18 +269,7 @@ def _write_config_raw(raw: dict) -> None:
 
 
 def _matrix_row(target_id: str) -> dict | None:
-    try:
-        import tomllib
-    except ModuleNotFoundError:  # pragma: no cover
-        return None
-    matrix = ROOT / "skill" / "neko-bridge" / "frameworks.toml"
-    if not matrix.is_file():
-        return None
-    with open(matrix, "rb") as handle:
-        for row in tomllib.load(handle).get("harness", []):
-            if row["id"] == target_id:
-                return row
-    return None
+    return next((row for row in _matrix_rows() if row["id"] == target_id), None)
 
 
 def _install_command(target_id: str, kind: str) -> str:
@@ -315,6 +327,9 @@ def install_target(target_id: str, kind: str = "route", dry_run: bool = False) -
 
     started = time.monotonic()
     try:
+        # shell=True 在这里是安全的：command 只可能来自仓库清单（TOML），
+        # 请求体只能提供 id。且安装命令本身就是 shell 语法（`bun add -g …`）。
+        # 派发路径（run_agent）仍然一律走列表形式，绝不过 shell。
         proc = subprocess.run(
             command,
             shell=True,

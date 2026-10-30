@@ -150,6 +150,7 @@ def main(argv: list[str] | None = None) -> int:
             if args.run and row.get("mcp_kind") == "cli":
                 command = mcp_line(row, binary)
                 print(f"$ {command}")
+                # command 来自 frameworks.toml 的 mcp_command，不是用户输入
                 result = subprocess.run(command, shell=True, capture_output=True, text=True, encoding="utf-8")
                 print(f"  → rc={result.returncode} {(result.stdout or result.stderr).strip()[:160]}")
         return 0

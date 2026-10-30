@@ -75,7 +75,7 @@ class AgentBridgePlugin(NekoPluginBase):
             'plugin': {
                 'id': 'agent_bridge',
                 'name': 'Agent 桥接',
-                'version': '0.2.1',
+                'version': '0.2.2',
                 'description': '把本机编码 Agent CLI 桥接成 N.E.K.O 运行时入口(生成面板:入口清单)。',
             },
             'entries': self._entry_rows(),

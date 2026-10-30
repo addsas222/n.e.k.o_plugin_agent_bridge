@@ -39,7 +39,7 @@ PROVIDERS_SRC = ROOT / "skill" / "neko-bridge" / "providers"
 DIST = ROOT / "dist"
 
 NAME = "agent_bridge"
-VERSION = "0.2.1"
+VERSION = "0.2.2"
 
 
 def manifest() -> dict:

@@ -1,6 +1,6 @@
 [project]
 name = "agent_bridge"
-version = "0.2.1"
+version = "0.2.2"
 description = "N.E.K.O local coding-agent bridge: dispatch tasks to local coding-agent CLIs as entries and LLM tools; built-in 9 agents plus data-driven providers/ for the rest"
 requires-python = ">=3.11"
 # 纯标准库 + 宿主自带 SDK；无第三方依赖。

@@ -38,6 +38,11 @@ Command Code / pi / Hermes / StepCode，合计 **14 条路由**），新增一�
 构造 argv（`build_argv`），全部走 `subprocess` 的列表形式，不经过 shell。
 解析不到可执行文件时返回 `AGENT_UNRESOLVED` 而不是回退到 `cmd.exe`。
 
+> 这条只约束**派发**路径。`webui/` 的「安装」与 `install.py` 的 `--run` 用
+> `shell=True` 执行 `bun add -g …` 这类命令 —— 那些命令**来自仓库清单**
+> （`provider.toml` / `frameworks.toml`），请求体只能给 id，注入面为零；
+> 而且它们本来就是 shell 语法，不走 shell 反而拼不出来。
+
 **版本探测必须并发。** 每个 Agent 最坏 45 秒，9 个串行 405 秒会撞宿主看门狗；
 `agents_list` 用 `asyncio.gather` 并发探测，最坏仍在 45 秒量级。
 
