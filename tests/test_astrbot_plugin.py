@@ -92,15 +92,28 @@ def _load_plugin():
     return module
 
 
+def _read_flat_yaml(path: Path) -> dict[str, str]:
+    """读 AstrBot 的 metadata.yaml —— 只有一层 key: value，不值得为它引入 PyYAML。
+
+    CI 不装第三方包，`import yaml` 会让整条测试挂掉；用 20 行换零依赖。
+    """
+    data: dict[str, str] = {}
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or ":" not in line:
+            continue
+        key, _, value = line.partition(":")
+        data[key.strip()] = value.strip().strip('"').strip("'")
+    return data
+
+
 def test_metadata_has_required_fields() -> None:
-    import tomllib  # noqa: F401  —— 仅确保标准库可用
-
-    import yaml  # type: ignore[import-not-found]
-
-    metadata = yaml.safe_load((PLUGIN / "metadata.yaml").read_text(encoding="utf-8"))
+    metadata = _read_flat_yaml(PLUGIN / "metadata.yaml")
     for field in REQUIRED_METADATA:
         assert field in metadata, f"metadata.yaml 缺 {field}"
-        assert isinstance(metadata[field], str), f"metadata.yaml 的 {field} 必须是字符串"
+        assert isinstance(metadata[field], str) and metadata[field], (
+            f"metadata.yaml 的 {field} 必须是非空字符串"
+        )
 
 
 def test_main_class_follows_astrbot_rule() -> None:
