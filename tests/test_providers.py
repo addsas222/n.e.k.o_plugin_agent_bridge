@@ -13,8 +13,6 @@ import sys
 import tomllib
 from pathlib import Path
 
-import pytest
-
 from bridge.providers import load_into
 from bridge.registry import (
     AGENT_SPECS,
@@ -52,36 +50,39 @@ def test_providers_dir_has_at_least_the_three_shipped_routes() -> None:
     assert {"gemini", "command-code", "pi"} <= names
 
 
-@pytest.mark.parametrize("directory", provider_dirs(), ids=lambda p: p.name)
-def test_manifest_is_well_formed(directory: Path) -> None:
+def test_manifest_is_well_formed() -> None:
     """每个清单都要能解析、id == 目录名、mode 合法、开关类必须给 prompt_flag。"""
-    raw = manifest_of(directory)
-    assert raw.get("schema") == 1, f"{directory.name}: schema 必须是 1"
+    for directory in provider_dirs():
+        raw = manifest_of(directory)
+        assert raw.get("schema") == 1, f"{directory.name}: schema 必须是 1"
 
-    section = raw["provider"]
-    assert section["id"] == directory.name, f"{directory.name}: id 必须等于目录名"
-    assert str(section["id"]).islower(), f"{directory.name}: id 必须小写"
-    assert section["mode"] in ("flag", "switch", "positional"), f"{directory.name}: mode 非法"
-    if section["mode"] in ("flag", "switch"):
-        assert section.get("prompt_flag"), f"{directory.name}: mode={section['mode']} 必须声明 prompt_flag"
-    assert section.get("binary") or section["id"]
-    # 每个新 Agent 都必须自带失败特征：全局表只覆盖最初 9 个 CLI 的措辞。
-    # 两种取其一即可 —— auth_patterns（去登录）或 fail_patterns（去起服务）。
-    has_patterns = bool(section.get("auth_patterns") or section.get("fail_patterns"))
-    timeout_only = section.get("failure_mode") == "timeout"
-    assert has_patterns or timeout_only, (
-        f"{directory.name}: 必须声明 auth_patterns / fail_patterns，"
-        f'或 failure_mode="timeout"（无输出、只能靠超时判定）'
-    )
+        section = raw["provider"]
+        assert section["id"] == directory.name, f"{directory.name}: id 必须等于目录名"
+        assert str(section["id"]).islower(), f"{directory.name}: id 必须小写"
+        assert section["mode"] in ("flag", "switch", "positional"), f"{directory.name}: mode 非法"
+        if section["mode"] in ("flag", "switch"):
+            assert section.get("prompt_flag"), (
+                f"{directory.name}: mode={section['mode']} 必须声明 prompt_flag"
+            )
+        assert section.get("binary") or section["id"]
+        # 每个新 Agent 都必须自带失败特征：全局表只覆盖最初 9 个 CLI 的措辞。
+        # 两种取其一即可 —— auth_patterns（去登录）或 fail_patterns（去起服务）；
+        # 实在没有输出可匹配的（如 step），用 failure_mode="timeout" 声明。
+        has_patterns = bool(section.get("auth_patterns") or section.get("fail_patterns"))
+        timeout_only = section.get("failure_mode") == "timeout"
+        assert has_patterns or timeout_only, (
+            f"{directory.name}: 必须声明 auth_patterns / fail_patterns，"
+            f'或 failure_mode="timeout"（无输出、只能靠超时判定）'
+        )
 
 
-@pytest.mark.parametrize("directory", provider_dirs(), ids=lambda p: p.name)
-def test_every_provider_is_registered(directory: Path) -> None:
-    assert directory.name in AGENT_SPECS, f"{directory.name} 没被合并进 AGENT_SPECS"
-    spec = AGENT_SPECS[directory.name]
-    assert spec.mode in ("flag", "switch", "positional")
-    if spec.mode in ("flag", "switch"):
-        assert spec.prompt_flag
+def test_every_provider_is_registered() -> None:
+    for directory in provider_dirs():
+        assert directory.name in AGENT_SPECS, f"{directory.name} 没被合并进 AGENT_SPECS"
+        spec = AGENT_SPECS[directory.name]
+        assert spec.mode in ("flag", "switch", "positional")
+        if spec.mode in ("flag", "switch"):
+            assert spec.prompt_flag
 
 
 def test_aliases_do_not_collide() -> None:
