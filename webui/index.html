@@ -1,0 +1,1070 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>agent_bridge 控制台</title>
+<style>
+  :root{
+    --paper:#f2f2ef; --surface:#fff; --ink:#111112; --ink-2:#5a5a5e;
+    --line:#d3d3ce; --line-2:#b9b9b3;
+    --ok:#1a7f37; --warn:#8a5a00; --bad:#b42318; --idle:#6b6b70;
+    --mono:ui-monospace,"Cascadia Mono",Consolas,"Courier New",monospace;
+    --sans:system-ui,"Segoe UI","Microsoft YaHei",sans-serif;
+  }
+  *{box-sizing:border-box;border-radius:0;margin:0;padding:0}
+  html,body{height:100%}
+  body{
+    background:var(--paper);color:var(--ink);font:12px/18px var(--sans);
+    display:flex;flex-direction:column;overflow:hidden;
+  }
+  /* ---------- 顶栏 ---------- */
+  header{
+    height:44px;flex:0 0 44px;display:flex;align-items:stretch;
+    background:var(--ink);color:#f4f4f0;border-bottom:1px solid #000;
+  }
+  header .brand{
+    display:flex;align-items:center;padding:0 14px;font:600 12px/1 var(--mono);
+    letter-spacing:.14em;border-right:1px solid #2c2c2e;
+  }
+  header .stats{display:flex;align-items:center;gap:0;flex:1;overflow:hidden}
+  header .stat{
+    display:flex;align-items:baseline;gap:6px;padding:0 12px;height:100%;
+    border-right:1px solid #2c2c2e;font:12px/44px var(--mono);white-space:nowrap;
+  }
+  header .stat b{font-size:15px;font-weight:600}
+  header .stat span{color:#9a9a9e;font-size:11px}
+  header nav{display:flex;align-items:stretch;border-left:1px solid #2c2c2e}
+  header nav button{
+    background:none;border:0;border-right:1px solid #2c2c2e;color:#9a9a9e;
+    font:11px/44px var(--sans);letter-spacing:.08em;padding:0 14px;cursor:pointer;
+  }
+  header nav button[aria-selected="true"]{background:#f4f4f0;color:var(--ink)}
+  header nav button:hover{color:#fff}
+  header nav button[aria-selected="true"]:hover{color:var(--ink)}
+  #clock{padding:0 12px;font:12px/44px var(--mono);color:#9a9a9e;border-left:1px solid #2c2c2e}
+  header .fold{
+    height:44px;padding:0 12px;background:none;border:0;border-left:1px solid #2c2c2e;
+    color:#9a9a9e;font:11px var(--sans);letter-spacing:.08em;cursor:pointer;
+  }
+  header .fold:hover{color:#fff}
+  header .fold[data-on="true"]{color:#f4f4f0;background:#2c2c2e}
+  footer .fold{
+    height:20px;padding:0 8px;border:1px solid var(--line);background:var(--surface);
+    color:var(--ink-2);font:11px var(--sans);cursor:pointer;
+  }
+  footer .fold:hover{border-color:var(--ink);color:var(--ink)}
+  #build{padding:0 12px;font:11px/44px var(--mono);color:#7d7d82;border-left:1px solid #2c2c2e;letter-spacing:.1em}
+  /* ---------- 上手引导 ---------- */
+  .guide{
+    flex:0 0 34px;display:flex;align-items:center;gap:14px;padding:0 10px;
+    background:#fffbe8;border-bottom:1px solid #e6d9a8;color:#5a4a00;
+    font:12px/34px var(--sans);
+  }
+  .guide b{font-family:var(--mono);font-weight:600}
+  .guide .sp{flex:1}
+  .guide button{
+    background:none;border:1px solid #d9c98a;color:#5a4a00;height:22px;padding:0 8px;
+    font:11px var(--sans);cursor:pointer;
+  }
+  .guide button:hover{border-color:#5a4a00}
+  .guide.bad{background:#fdeceb;border-bottom-color:#e5a9a3;color:#7a1c14}
+  .guide.bad button{border-color:#e5a9a3;color:#7a1c14}
+  .guide.bad button:hover{border-color:#7a1c14}
+  /* ---------- 主体 ---------- */
+  main{flex:1;display:grid;grid-template-columns:1fr 5px var(--aside-w,380px);min-height:0}
+  /* 拖拽条：6px 命中区，1px 视觉线，零圆角 */
+  .splitter{
+    cursor:col-resize;background:var(--line);position:relative;user-select:none;
+  }
+  .splitter::after{content:"";position:absolute;inset:0 -3px;}
+  .splitter:hover,.splitter[data-drag="true"]{background:var(--ink)}
+  /* 收纳：右侧面板隐藏，列表占满 */
+  body.aside-collapsed main{grid-template-columns:1fr}
+  body.aside-collapsed .splitter,body.aside-collapsed aside{display:none}
+  /* 收纳：底部日志只留标题条 */
+  body.log-collapsed footer{flex:0 0 26px!important}
+  body.log-collapsed footer .bd{display:none}
+
+  @media (max-width:960px){
+    main{grid-template-columns:1fr;grid-template-rows:1fr auto}
+    .splitter{display:none}
+    aside{max-height:44vh}
+  }
+  section.list{display:flex;flex-direction:column;min-width:0;min-height:0;border-right:1px solid var(--line)}
+  .toolbar{
+    height:34px;flex:0 0 34px;display:flex;align-items:center;gap:8px;
+    padding:0 8px;border-bottom:1px solid var(--line);background:var(--surface);
+  }
+  .toolbar input{
+    flex:1;height:24px;border:1px solid var(--line);background:var(--paper);
+    font:12px var(--mono);padding:0 6px;color:var(--ink);
+  }
+  .toolbar input:focus{outline:1px solid var(--ink);outline-offset:-1px;border-color:var(--ink)}
+  .toolbar .hint{color:var(--ink-2);font:11px var(--mono);white-space:nowrap}
+  .scroll{flex:1;overflow:auto;min-height:0;background:var(--surface);overscroll-behavior:contain}
+  /* 可见的直角滚动条 —— 内容长时必须一眼看出能滚 */
+  .scroll::-webkit-scrollbar,footer .bd::-webkit-scrollbar,.out::-webkit-scrollbar{width:10px;height:10px}
+  .scroll::-webkit-scrollbar-track,footer .bd::-webkit-scrollbar-track,.out::-webkit-scrollbar-track{background:var(--paper)}
+  .scroll::-webkit-scrollbar-thumb,footer .bd::-webkit-scrollbar-thumb,.out::-webkit-scrollbar-thumb{background:var(--line-2)}
+  .scroll::-webkit-scrollbar-thumb:hover,footer .bd::-webkit-scrollbar-thumb:hover,.out::-webkit-scrollbar-thumb:hover{background:var(--ink-2)}
+  table{width:100%;border-collapse:collapse;table-layout:fixed}
+  thead th .rz{
+    position:absolute;top:0;right:-3px;width:7px;height:100%;display:block;
+    cursor:col-resize;background:transparent;
+  }
+  thead th .rz:hover,thead th .rz[data-drag="true"]{background:var(--ink)}
+  thead th{
+    position:sticky;top:0;z-index:1;background:var(--paper);
+    height:28px;padding:0 8px;text-align:left;border-bottom:1px solid var(--line);
+    font:11px/28px var(--sans);letter-spacing:.06em;text-transform:uppercase;color:var(--ink-2);
+    white-space:nowrap;position:relative;user-select:none;
+  }
+  tbody td{
+    height:30px;padding:0 8px;border-bottom:1px solid #ecece8;
+    font:12px/30px var(--mono);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+    font-variant-numeric:tabular-nums;
+  }
+  tbody tr{cursor:pointer}
+  tbody tr:hover td{border-bottom-color:var(--line-2)}
+  tbody tr[aria-selected="true"] td{background:var(--ink);color:#f4f4f0;border-bottom-color:#000}
+  tbody tr[aria-selected="true"] .st-ok{color:#7ee2a8}
+  tbody tr[aria-selected="true"] .st-warn{color:#f0c674}
+  tbody tr[aria-selected="true"] .st-bad{color:#ff7b72}
+  tbody tr[aria-selected="true"] .st-idle{color:#b6b6ba}
+  td.id{font-weight:600}
+  td.num,td.ver{text-align:right}
+  .chip{display:inline-flex;align-items:center;gap:6px}
+  .sq{width:6px;height:6px;display:inline-block;flex:0 0 6px}
+  .st-ok{color:var(--ok)} .st-warn{color:var(--warn)} .st-bad{color:var(--bad)} .st-idle{color:var(--idle)}
+  .sq.ok{background:var(--ok)} .sq.warn{background:var(--warn)}
+  .sq.bad{background:var(--bad)} .sq.idle{background:var(--idle)}
+  /* ---------- 右栏 ---------- */
+  aside{
+    display:flex;flex-direction:column;min-width:0;min-height:0;background:var(--surface);
+    border-left:0;overflow:hidden;
+  }
+  .block{border-bottom:1px solid var(--line);padding:10px 12px}
+  .block h2{
+    font:600 11px/16px var(--sans);letter-spacing:.12em;text-transform:uppercase;
+    color:var(--ink-2);margin-bottom:8px;
+  }
+  .kv{display:grid;grid-template-columns:62px 1fr;gap:2px 8px;font:12px/18px var(--mono)}
+  .kv dt{color:var(--ink-2);font-family:var(--sans);font-size:11px;line-height:18px}
+  .kv dd{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  textarea,input[type=text],input[type=number]{
+    width:100%;border:1px solid var(--line);background:var(--paper);color:var(--ink);
+    font:12px/18px var(--mono);padding:5px 6px;
+  }
+  textarea{height:88px;resize:vertical;min-height:48px}
+  textarea:focus,input:focus{outline:1px solid var(--ink);outline-offset:-1px;border-color:var(--ink)}
+  .row{display:flex;gap:8px;align-items:center;margin-top:8px}
+  .row > label{color:var(--ink-2);font-size:11px;white-space:nowrap}
+  button.act{
+    height:28px;padding:0 12px;border:1px solid var(--line);background:var(--surface);
+    color:var(--ink);font:12px var(--sans);cursor:pointer;white-space:nowrap;
+  }
+  button.act:hover{border-color:var(--ink)}
+  button.act:active{transform:translateY(1px)}
+  button.act.primary{background:var(--ink);color:#f4f4f0;border-color:var(--ink)}
+  button.act.primary:hover{background:#000}
+  button.act:disabled{color:var(--idle);border-color:var(--line);background:var(--paper);cursor:not-allowed;transform:none}
+  .out{
+    flex:1;min-height:80px;overflow:auto;background:var(--ink);color:#e8e8e4;
+    font:12px/17px var(--mono);padding:8px 10px;white-space:pre-wrap;word-break:break-word;
+    max-height:40vh;
+  }
+  .meta{font:11px/16px var(--mono);color:var(--ink-2);padding:6px 12px;border-bottom:1px solid var(--line)}
+  button.mini{
+    height:20px;padding:0 8px;border:1px solid var(--line-2);background:var(--surface);
+    color:var(--ink);font:11px var(--mono);cursor:pointer;line-height:18px;
+  }
+  button.mini:hover{border-color:var(--ink);background:var(--ink);color:var(--surface)}
+  button.mini:active{transform:translateY(1px)}
+  tbody tr[aria-selected="true"] button.mini{background:var(--ink);color:#f4f4f0;border-color:#5a5a5e}
+  .empty{padding:16px 12px;color:var(--ink-2);font:12px/20px var(--sans)}
+  .empty kbd{
+    border:1px solid var(--line-2);padding:0 4px;font:11px var(--mono);
+    background:var(--paper);color:var(--ink);
+  }
+  /* ---------- 滑条（无级） ---------- */
+  .slider{display:flex;align-items:center;gap:6px}
+  .slider input[type=range]{
+    -webkit-appearance:none;appearance:none;height:18px;background:transparent;cursor:ew-resize;
+    width:110px;margin:0;
+  }
+  .slider input[type=range]::-webkit-slider-runnable-track{height:2px;background:var(--line-2)}
+  .slider input[type=range]::-webkit-slider-thumb{
+    -webkit-appearance:none;width:8px;height:16px;background:var(--ink);margin-top:-7px;border:0;
+  }
+  .slider input[type=range]::-moz-range-track{height:2px;background:var(--line-2)}
+  .slider input[type=range]::-moz-range-thumb{width:8px;height:16px;background:var(--ink);border:0;border-radius:0}
+  .slider .val{font:11px var(--mono);color:var(--ink);min-width:46px;text-align:right}
+  .follow{
+    border:1px solid var(--line);background:var(--surface);color:var(--ink-2);
+    height:20px;padding:0 8px;font:11px var(--sans);cursor:pointer;
+  }
+  .follow[data-on="true"]{background:var(--ink);color:var(--surface);border-color:var(--ink)}
+  /* ---------- 审计条 ---------- */
+  footer{flex:0 0 132px;border-top:1px solid var(--line);background:var(--surface);display:flex;flex-direction:column}
+  footer .hd{
+    height:26px;flex:0 0 26px;display:flex;align-items:center;gap:8px;padding:0 8px;
+    border-bottom:1px solid var(--line);font:11px var(--sans);color:var(--ink-2);
+    letter-spacing:.1em;text-transform:uppercase;
+  }
+  footer .bd{flex:1;overflow:auto;padding:0}
+  footer table td{height:22px;line-height:22px;font-size:11px;border-bottom:1px solid #f0f0ec}
+  footer table td.rel{color:var(--ink-2)}
+  .hidden{display:none!important}
+
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">AGENT&nbsp;BRIDGE</div>
+  <div class="stats" id="stats">
+    <div class="stat"><b id="s-total">–</b><span>路由</span></div>
+    <div class="stat"><b id="s-ready">–</b><span>就绪</span></div>
+    <div class="stat"><b id="s-login">–</b><span>需登录</span></div>
+    <div class="stat"><b id="s-bad">–</b><span>不可用</span></div>
+    <div class="stat" title="HARNESS 页签里的全部框架数（含桌面/IDE/Web 形态）"><b id="s-fw">–</b><span>框架</span></div>
+  </div>
+  <nav>
+    <button id="tab-routes" aria-selected="true">路由</button>
+    <button id="tab-harness" aria-selected="false">HARNESS</button>
+  </nav>
+  <button class="fold" id="fold-aside" title="收起/展开右侧面板（[）">面板</button>
+  <div id="clock">--:--:--</div>
+  <div id="build" title="前/后端构建号。两者不一致说明服务没重启，功能会点不动">UI r5 · API ?</div>
+</header>
+
+<div class="guide" id="guide">
+  <span><b>①</b> 左栏点一行选中 Agent</span>
+  <span><b>②</b> 右栏写任务</span>
+  <span><b>③</b> 按 <b>Enter</b> 派发，输出在右下方</span>
+  <span class="sp"></span>
+  <span style="color:#8a7a30">灰色「需登录 / 没装」的点了也派不出去</span>
+  <button id="guide-close">知道了</button>
+</div>
+
+<div class="guide bad hidden" id="warn">
+  <span><b>!</b> 后端版本不匹配，装/定位/探测可能点不动。</span>
+  <span id="warn-detail" style="font-family:var(--mono);font-size:11px"></span>
+  <span class="sp"></span>
+  <span>在终端 <b>Ctrl+C</b> 后重跑 <b>python webui/server.py</b>，再刷新本页</span>
+  <button id="warn-close">知道了</button>
+</div>
+
+<main>
+  <section class="list">
+    <div class="toolbar">
+      <input id="filter" type="text" placeholder="过滤 id / 标签  (/)" autocomplete="off" spellcheck="false">
+      <span class="hint" id="list-hint">j/k 移动 · Enter 派发 · r 刷新</span>
+      <button class="act" id="probe-all" title="逐个查每个 CLI 的版本（每个 1–3 秒，并发 3 个）">探测全部版本</button>
+      <span class="hint" id="probe-progress"></span>
+    </div>
+    <div class="scroll">
+      <table id="tbl">
+        <colgroup id="cols"></colgroup>
+        <thead><tr id="head"></tr></thead>
+        <tbody id="body"></tbody>
+      </table>
+      <div class="empty hidden" id="empty"></div>
+    </div>
+  </section>
+
+  <div class="splitter" id="splitter" title="拖动调宽度 · 双击复位"></div>
+
+  <aside>
+    <div class="block" id="detail">
+      <h2>当前选择</h2>
+      <div class="empty" id="detail-empty">
+        选中一行，按 <kbd>Enter</kbd> 派发。<br>按 <kbd>/</kbd> 可直接过滤。
+      </div>
+      <dl class="kv hidden" id="detail-kv"></dl>
+    </div>
+
+    <div class="block" id="dispatch-block">
+      <h2>派发任务</h2>
+      <textarea id="task" placeholder="任务描述（自包含）。Enter 发送，Shift+Enter 换行。"></textarea>
+      <div class="row">
+        <label for="cwd">cwd</label>
+        <input id="cwd" type="text" placeholder="留空=默认工作目录" spellcheck="false">
+      </div>
+      <div class="row">
+        <label for="timeout">超时</label>
+        <div class="slider" style="flex:1">
+          <input id="timeout" type="range" min="5" max="3600" step="5" value="300">
+          <span class="val" id="timeout-val">5:00</span>
+        </div>
+      </div>
+      <div class="row">
+        <button class="act primary" id="run" disabled style="flex:1">派发 Enter</button>
+        <button class="act" id="toggle" disabled title="切换该 Agent 的 enabled">禁用 e</button>
+      </div>
+    </div>
+
+    <div class="meta" id="out-meta">未派发</div>
+    <pre class="out" id="out"></pre>
+  </aside>
+</main>
+
+<footer>
+  <div class="hd">
+    <span>最近派发</span>
+    <span id="audit-count" style="color:var(--idle)"></span>
+    <button class="fold" id="fold-log" title="收起/展开日志条">日志</button>
+    <button class="follow" id="follow" data-on="true" title="开=始终停在最新；往下翻会自动暂停">跟随</button>
+    <span id="follow-hint" style="color:var(--warn);display:none">已暂停 · 点「跟随」回到最新</span>
+    <span style="flex:1"></span>
+    <div class="slider">
+      <span style="color:var(--ink-2)">高度</span>
+      <input id="log-height" type="range" min="80" max="460" step="1" value="132">
+    </div>
+    <span id="toast" style="color:var(--bad)"></span>
+  </div>
+  <div class="bd" id="audit-scroll">
+    <table><tbody id="audit"></tbody></table>
+  </div>
+</footer>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const state = { view:"routes", agents:[], harness:[], sel:null, filter:"", versions:{}, running:false, install:{}, updated:new Set(), probing:new Set(), lastRun:{}, follow:true };
+const SEEN_KEY = "ab-versions";
+
+const STATUS = {
+  ok:    {cls:"ok",   text:"可派发"},
+  warn:  {cls:"warn", text:"需登录"},
+  bad:   {cls:"bad",  text:"失败"},
+  idle:  {cls:"idle", text:"没装"},
+};
+
+function statusOf(a){
+  if (!a.exists) return {key:"idle", text:"没装"};
+  if (!a.enabled) return {key:"idle", text:"已禁用"};
+  if (a.needs_login) return {key:"warn", text:"需登录"};
+  // 慢 ≠ 不可用：有的 CLI 未登录时静默挂起（step 实测 40s+ 零输出），
+  // 单独一档，别让用户以为它能正常干活
+  if (a.slow) return {key:"warn", text:"慢/待验证"};
+  return {key:"ok", text:"可派发"};
+}
+function chip(st){
+  const c = STATUS[st.key] || STATUS.idle;
+  return `<span class="chip st-${c.cls}"><i class="sq ${c.cls}"></i>${st.text}</span>`;
+}
+function esc(s){ return String(s ?? "").replace(/[&<>"]/g, (c)=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
+function toast(msg){ $("toast").textContent = msg; setTimeout(()=>{ if($("toast").textContent===msg) $("toast").textContent=""; }, 4000); }
+
+async function api(path, opts){
+  const res = await fetch(path, opts);
+  const ct = res.headers.get("content-type") || "";
+  if (!ct.includes("json")) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+/* ---------------- 表格渲染 ---------------- */
+const COLS_ROUTE = [
+  {k:"id",     w:122, min:92,  t:"Agent"},
+  {k:"status", w:86,  min:70,  t:"状态"},
+  {k:"label",  w:150, min:96,  t:"标签",  hideBelow:1180},
+  {k:"mode",   w:70,  min:58,  t:"mode"},
+  {k:"alias",  w:104, min:72,  t:"别名",  hideBelow:1460},
+  {k:"cmd",    w:0,   min:140, t:"解析到的命令", flex:true},
+  {k:"src",    w:76,  min:58,  t:"来源",  hideBelow:1460},
+  {k:"ver",    w:96,  min:82,  t:"版本"},
+  {k:"last",   w:120, min:92,  t:"上次"},
+];
+const COLS_HARNESS = [
+  {k:"id",   w:150, min:100, t:"框架"},
+  {k:"form", w:64,  min:52,  t:"形态"},
+  {k:"inst", w:78,  min:64,  t:"skill"},
+  {k:"mcp",  w:82,  min:64,  t:"MCP"},
+  {k:"act",  w:98,  min:84,  t:"操作"},
+  {k:"dir",  w:0,   min:140, t:"目录", flex:true},
+];
+
+const COL_KEY = "ab-cols";
+let COLW = {};
+try{ COLW = JSON.parse(localStorage.getItem(COL_KEY) || "{}"); }catch{ COLW = {}; }
+function saveColW(){ try{ localStorage.setItem(COL_KEY, JSON.stringify(COLW)); }catch{} }
+
+/** 当前该显示哪些列。窄屏靠**减少列**，不靠隐藏单元格 ——
+ *  隐藏 td 而表头不跟着少，fixed 布局下后面的单元格会左移，
+ *  表现就是「别名里显示命令、命令里显示版本」。 */
+function allCols(){ return state.view === "routes" ? COLS_ROUTE : COLS_HARNESS; }
+function visibleCols(){
+  const w = window.innerWidth;
+  return allCols().filter(c => !c.hideBelow || w >= c.hideBelow);
+}
+function colPx(c){
+  const saved = COLW[c.k];
+  if (typeof saved === "number" && saved >= c.min) return saved;
+  return c.w || c.min;
+}
+/** 把 home 前缀换成 ~，中间用 … 省略；保留尾部两段以便区分工作区。 */
+function shortPath(full){
+  if (!full) return "—";
+  let text = String(full).replace(/\\/g, "/");
+  const home = text.match(/^[A-Za-z]:\/Users\/[^/]+/);
+  if (home) text = "~" + text.slice(home[0].length);
+  const parts = text.split("/");
+  if (parts.length <= 4) return text;
+  return parts.slice(0, 2).join("/") + "/…/" + parts.slice(-2).join("/");
+}
+
+/** 表头与单元格出自同一个 visibleCols()，天然对齐。 */
+function cellHtml(cols, k, inner, attrs){
+  if (!cols.some(c => c.k === k)) return "";
+  return `<td${attrs ? " " + attrs : ""}>${inner}</td>`;
+}
+
+let lastColKey = "";
+function renderHead(){
+  const cols = visibleCols();
+  lastColKey = cols.map(c => c.k).join(",");
+  $("cols").innerHTML = cols.map(c =>
+    `<col data-k="${c.k}" style="width:${colPx(c)}px">`).join("");
+  $("head").innerHTML = cols.map(c =>
+    `<th data-k="${c.k}">${c.t}<i class="rz" data-rz="${c.k}" title="拖动改宽度 · 双击复位"></i></th>`
+  ).join("");
+}
+
+function routeRows(){
+  const f = state.filter.toLowerCase();
+  return state.agents.filter(a =>
+    !f || a.id.includes(f) || (a.label||"").toLowerCase().includes(f) ||
+    (a.aliases||[]).some(x=>x.includes(f)));
+}
+
+function render(){
+  renderHead();
+  const cols = visibleCols();
+  const isRoutes = state.view === "routes";
+  const rows = isRoutes ? routeRows() : harnessRows();
+  $("list-hint").textContent = isRoutes
+    ? "只列可派发的 CLI · 其余形态见 HARNESS · j/k 移动 · Enter 派发"
+    : "点击一行复制该框架的安装命令";
+
+  if (!rows.length){
+    $("body").innerHTML = "";
+    $("empty").classList.remove("hidden");
+    $("empty").innerHTML = state.filter
+      ? `没有匹配 “${esc(state.filter)}” 的项。<br>按 <kbd>Esc</kbd> 清空过滤。`
+      : "没有数据。检查 server.py 是否正常返回 /api/agents。";
+    return;
+  }
+  $("empty").classList.add("hidden");
+
+  if (isRoutes){
+    $("body").innerHTML = rows.map(a=>{
+      const st = statusOf(a);
+      const ver = state.versions[a.id] ?? "";
+      const last = state.lastRun[a.id];
+      const aliases = (a.aliases||[]).join(", ");
+      const lastInner = last
+        ? `<span class="st-${last.ok ? "ok" : (last.needs_login ? "warn" : "bad")}">${last.ok ? "OK" : (last.needs_login ? "需登录" : "失败")}</span> ${esc(last.time)} · ${last.seconds}s`
+        : `<span style="color:var(--idle)">—</span>`;
+      const verInner = ver
+        ? (state.updated.has(a.id) ? "↑ " : "") + esc(ver.slice(0,16))
+        : a.exists ? `<button class="mini" data-probe="${esc(a.id)}">↻ 探测</button>`
+        : a.install_cmd ? `<button class="mini" data-install="${esc(a.id)}" data-kind="route">安装</button>`
+        : `<button class="mini" data-locate="${esc(a.id)}" data-kind="route">定位</button>`;
+      return `<tr data-id="${esc(a.id)}" aria-selected="${state.sel===a.id}">
+        ${cellHtml(cols,"id", esc(a.id), 'class="id"')}
+        ${cellHtml(cols,"status", chip(st))}
+        ${cellHtml(cols,"label", esc(a.label), `class="col-label" title="${esc(a.label)}"`)}
+        ${cellHtml(cols,"mode", esc(a.mode))}
+        ${cellHtml(cols,"alias", esc(aliases) || "—", `class="col-alias" title="${esc(aliases)}"`)}
+        ${cellHtml(cols,"cmd", esc(a.command), `class="col-cmd" title="${esc(a.command)}"`)}
+        ${cellHtml(cols,"src", esc(a.source), `class="col-src" title="解析来源：path / cmd-shim / override / missing"`)}
+        ${cellHtml(cols,"ver", verInner, `class="ver" title="${esc(ver || (a.exists ? "点「探测」查版本" : "没装：可安装或定位"))}"`)}
+        ${cellHtml(cols,"last", lastInner, `class="last" title="${esc(last ? (last.task||"") : "本面板还没派发过")}"`)}
+      </tr>`;
+    }).join("");
+  } else {
+    const f = state.filter.toLowerCase();
+    const rows2 = state.harness.filter(h => !f || h.id.includes(f) || (h.label||"").toLowerCase().includes(f));
+    $("body").innerHTML = rows2.map(h=>{
+      const st = h.installed ? {key:"ok",text:"已装"} : (h.exists ? {key:"warn",text:"待装"} : {key:"idle",text:"无目录"});
+      let action = `<span style="color:var(--idle)">—</span>`;
+      if (h.form === "web") {
+        action = h.url ? `<a class="mini" href="${esc(h.url)}" target="_blank" rel="noreferrer" style="text-decoration:none">打开</a>` : action;
+      } else if (!h.exists) {
+        action = h.install_cmd
+          ? `<button class="mini" data-install="${esc(h.id)}" data-kind="harness">装应用</button>`
+          : `<button class="mini" data-locate="${esc(h.id)}" data-kind="harness">定位</button>`;
+      } else if (!h.installed) {
+        action = `<button class="mini" data-skill="${esc(h.id)}">装 skill</button>`;
+      }
+      const busyKey = state.install[h.id];
+      if (busyKey) action = `<span style="color:var(--warn)">${esc(busyKey)}…</span>`;
+      return `<tr data-hid="${esc(h.id)}" data-dir="${esc(h.dir)}">
+        ${cellHtml(cols,"id", esc(h.id), `class="id" title="${esc(h.label)}"`)}
+        ${cellHtml(cols,"form", esc(h.form))}
+        ${cellHtml(cols,"inst", chip(st))}
+        ${cellHtml(cols,"mcp", esc(h.mcp_kind))}
+        ${cellHtml(cols,"act", action)}
+        ${cellHtml(cols,"dir", esc(shortPath(h.dir)), `class="dir" title="${esc(h.dir || h.install_hint || "未登记目录")}"`)}
+      </tr>`;
+    }).join("");
+    if (!rows2.length){
+      $("body").innerHTML = "";
+      $("empty").classList.remove("hidden");
+      $("empty").innerHTML = `没有匹配 “${esc(state.filter)}” 的框架。`;
+    }
+  }
+  renderDetail();
+}
+
+function harnessRows(){ return state.harness; }
+
+/** 右侧「当前选择」面板。render() 每次都调它，所以它必须**幂等**：
+ *  没选中就显示空态并禁用按钮，选中就填字段 —— 不依赖 select() 的副作用。 */
+function renderDetail(){
+  const a = state.agents.find(x => x.id === state.sel);
+  const kv = $("detail-kv");
+  const empty = $("detail-empty");
+  if (!a){
+    empty.classList.remove("hidden");
+    kv.classList.add("hidden");
+    $("run").disabled = true;
+    $("toggle").disabled = true;
+    return;
+  }
+  empty.classList.add("hidden");
+  kv.classList.remove("hidden");
+  const ver = state.versions[a.id] || "—";
+  kv.innerHTML = `
+    <dt>状态</dt><dd>${chip(statusOf(a))}</dd>
+    <dt>标签</dt><dd title="${esc(a.label)}">${esc(a.label)}</dd>
+    <dt>命令</dt><dd title="${esc(a.command)}">${esc(a.command)}</dd>
+    <dt>来源</dt><dd>${esc(a.source)}</dd>
+    <dt>版本</dt><dd title="${esc(ver)}">${esc(ver)}</dd>
+    ${a.login_hint ? `<dt>登录</dt><dd title="${esc(a.login_hint)}">${esc(a.login_hint)}</dd>` : ""}
+    ${a.exists ? "" : `<dt>安装</dt><dd title="${esc(a.install_hint || "点版本列的「安装/定位」")}">${esc(a.install_hint || "未安装")}</dd>`}
+    ${a.notes ? `<dt>备注</dt><dd title="${esc(a.notes)}">${esc(a.notes)}</dd>` : ""}`;
+  $("run").disabled = !a.exists || !a.enabled || state.running;
+  $("toggle").disabled = !a.exists;
+  $("toggle").textContent = a.enabled ? "禁用 e" : "启用 e";
+}
+
+/* ---------------- 选择与详情 ---------------- */
+function select(id, opts={}){
+  state.sel = id;
+  render();                       // render() 内部会刷新右侧详情（renderDetail）
+  const a = state.agents.find(x=>x.id===id);
+  if (!a) return;
+  if (opts.focus) $("task").focus();
+  if (a.exists && !state.versions[a.id]) probeVersion(a.id);
+}
+
+async function probeVersion(id, budget=10){
+  if (state.probing.has(id)) return;
+  state.probing.add(id);
+  state.versions[id] = "探测中";
+  render();
+  const ctl = new AbortController();
+  const timer = setTimeout(()=>ctl.abort(), (budget+8)*1000);
+  try{
+    const d = await api(`/api/version?agent=${encodeURIComponent(id)}&timeout=${budget}&refresh=1`, {signal: ctl.signal});
+    state.versions[id] = d.version || "—";
+    if (d.cached) toast(`${id}：${d.version}（缓存）`);
+  }catch(e){
+    // 失败/超时都还回按钮，允许重试；不要留一个假状态
+    delete state.versions[id];
+    toast(`探测 ${id} ${e.name === "AbortError" ? "超时" : "失败"}：${String(e.message || e).slice(0,70)}`);
+  }finally{
+    clearTimeout(timer);
+    state.probing.delete(id);
+    render();
+  }
+}
+
+/** 并发 3 个把还没探测过的都查一遍。探测要真跑 CLI，串行 13 个会等到不耐烦。 */
+async function probeAll(){
+  await loadAgents();
+  const queue = state.agents.filter(a=>a.exists && !state.versions[a.id]).map(a=>a.id);
+  const total = queue.length;
+  if (!total) {
+    $("probe-progress").textContent = "版本已就绪";
+    setTimeout(()=>$("probe-progress").textContent="",2000);
+    return;
+  }
+  let done = 0;
+  const tick = () => { $("probe-progress").textContent = `${done}/${total}`; render(); };
+  $("probe-all").disabled = true;
+  tick();
+  const worker = async () => {
+    while (queue.length){
+      const id = queue.shift();
+      state.versions[id] = "…"; tick();
+      try{
+        const d = await api(`/api/version?agent=${encodeURIComponent(id)}`);
+        state.versions[id] = d.version || "—";
+      }catch{ state.versions[id] = "err"; }
+      done++; tick();
+    }
+  };
+  await Promise.all([worker(), worker(), worker()]);
+  $("probe-progress").textContent = `${total} 个已探测`;
+  $("probe-all").disabled = false;
+  setTimeout(()=>{ $("probe-progress").textContent=""; }, 3000);
+}
+
+/* ---------------- 安装 / 定位 ---------------- */
+async function refreshAll(){
+  await loadAgents();
+  await loadHarness();
+  render();
+}
+
+async function doInstall(id, kind){
+  state.install[id] = kind === "route" ? "安装中" : "装应用中";
+  render();
+  try{
+    const r = await api("/api/install", {method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({ id, kind })});
+    if (r.dry_run) toast(`将执行：${r.command}`);
+    else if (r.ok) toast(`${id} 装好了${r.version ? " · " + r.version : ""}`);
+    else if (r.reason === "no-command") toast(r.hint || "没有一键安装命令，点「定位」手动指定路径");
+    else toast(`${id} 安装未成功：${String(r.log || r.reason || "").slice(0,120)}`);
+  }catch(e){ toast(String(e)); }
+  delete state.install[id];
+  await refreshAll();
+  if (kind === "route") probeVersion(id);
+}
+
+async function doInstallSkill(id){
+  state.install[id] = "装 skill";
+  render();
+  try{
+    const r = await api("/api/install_skill", {method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({ id })});
+    if (r.ok) toast(`${id} 的 skill 已装到 ${r.target}`);
+    else if (r.reason === "need-locate") toast(r.hint || "目录不存在，先装应用或「定位」");
+    else toast(`${id} 装 skill 失败`);
+  }catch(e){ toast(String(e)); }
+  delete state.install[id];
+  await loadHarness();
+  render();
+}
+
+async function doLocate(id, kind){
+  const hint = kind === "route"
+    ? `输入 ${id} 的可执行文件完整路径（例如 C://...//gemini.exe）`
+    : `输入 ${id} 的安装/配置目录（例如 C://Users//你//.cline）`;
+  const value = window.prompt(hint, "");
+  if (!value) return;
+  try{
+    const r = await api("/api/locate", {method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({ id, path: value, kind })});
+    if (r.error) { toast(r.error); return; }
+    toast(`已记住 ${id} 的路径：${r.exe_override || r.dir}`);
+  }catch(e){ toast(String(e)); }
+  await refreshAll();
+  if (kind === "route") probeVersion(id);
+}
+
+/* ---------------- 自动探测版本 ---------------- */
+async function autoProbe(){
+  const todo = state.agents.filter(a => a.exists && !state.versions[a.id]).map(a => a.id);
+  if (!todo.length) return;
+  let prev = {};
+  try{ prev = JSON.parse(localStorage.getItem(SEEN_KEY) || "{}"); }catch{ prev = {}; }
+  const queue = [...todo];
+  const total = todo.length;
+  let done = 0;
+  $("probe-all").disabled = true;
+  const worker = async () => {
+    while (queue.length){
+      const id = queue.shift();
+      state.versions[id] = "探测中";
+      render();
+      try{
+        const d = await api(`/api/version?agent=${encodeURIComponent(id)}&timeout=6`);
+        state.versions[id] = d.version || "—";
+        if (prev[id] && d.version && prev[id] !== d.version) state.updated.add(id);
+        if (d.version) prev[id] = d.version;
+      }catch{
+        delete state.versions[id];
+      }
+      done += 1;
+      $("probe-progress").textContent = `自动探测 ${done}/${total}`;
+      render();
+    }
+  };
+  await Promise.all([worker(), worker()]);
+  $("probe-all").disabled = false;
+  $("probe-progress").textContent = "";
+  try{ localStorage.setItem(SEEN_KEY, JSON.stringify(prev)); }catch{}
+  if (state.updated.size){
+    toast(`${state.updated.size} 个 Agent 版本有变化（行内 ↑）`);
+    render();
+  }
+}
+
+/* ---------------- 前后端一致性 ---------------- */
+async function checkHealth(){
+  try{
+    const h = await api("/api/health");
+    state.apiBuild = h.build || "?";
+    $("build").textContent = `UI r5 · API ${state.apiBuild}`;
+    const need = ["install", "install_skill", "locate"];
+    const missing = need.filter(f => !(h.features || []).includes(f));
+    if (missing.length){
+      $("warn-detail").textContent = `缺接口：${missing.join(" / ")}（API ${state.apiBuild}）`;
+      $("warn").classList.remove("hidden");
+      toast("后端是旧版本：请重启 webui/server.py");
+      return false;
+    }
+    return true;
+  }catch(e){
+    $("build").textContent = "UI r5 · API 离线";
+    return false;
+  }
+}
+
+/* ---------------- 数据加载 ---------------- */
+async function loadAgents(){
+  const d = await api("/api/agents");
+  state.agents = d.agents || [];
+  // 服务端启动时已预热版本，直接吸收；前端不再"点一下才开始探测"
+  for (const a of state.agents){ if (a.version) state.versions[a.id] = a.version; }
+  const ready = state.agents.filter(a=>a.ready).length;
+  const login = state.agents.filter(a=>a.exists && a.needs_login).length;
+  const bad = state.agents.filter(a=>!a.exists || !a.enabled).length;
+  $("s-total").textContent = state.agents.length;
+  $("s-ready").textContent = ready;
+  $("s-login").textContent = login;
+  $("s-bad").textContent = bad;
+  if (state.sel && !state.agents.some(a=>a.id===state.sel)) state.sel = null;
+  render();
+}
+
+async function loadHarness(){
+  const d = await api("/api/harness");
+  state.harness = d.harness || [];
+  const fw = new Set(state.harness.map(h => h.id)).size;
+  $("s-fw").textContent = fw;
+}
+
+async function loadAudit(){
+  try{
+    const d = await api("/api/audit?limit=40");
+    const rows = d.records || [];
+    $("audit-count").textContent = rows.length ? `${rows.length} 条` : "";
+    state.lastRun = {};
+    for (const r of rows){
+      const id = r.agent;
+      if (!id || state.lastRun[id]) continue;   // rows 是倒序，第一条就是最新
+      const ok = r.ok === true || (r.exit_code === 0 && !r.needs_login && !r.timed_out);
+      const stamp = r.ts || r.at || "";
+      state.lastRun[id] = {
+        ok,
+        needs_login: !!r.needs_login,
+        time: String(stamp).slice(11, 19) || "—",
+        seconds: ((r.duration_ms || 0) / 1000).toFixed(1),
+        task: r.task || "",
+      };
+    }
+    $("audit").innerHTML = rows.map(r=>{
+      const ok = r.exit_code === 0 && !r.needs_login && !r.timed_out;
+      const cls = r.needs_login ? "warn" : (ok ? "ok" : "bad");
+      const ts = r.at ? String(r.at).slice(11,19) : (r.ts ? String(r.ts).slice(11,19) : "");
+      return `<tr>
+        <td style="width:74px;color:var(--ink-2)">${esc(ts)}</td>
+        <td style="width:120px" class="id">${esc(r.agent||"")}</td>
+        <td style="width:80px"><span class="chip st-${cls}"><i class="sq ${cls}"></i>${r.needs_login?"需登录":(ok?"OK":"失败")}</span></td>
+        <td style="width:60px;text-align:right">${r.duration_ms!=null?(r.duration_ms/1000).toFixed(1)+"s":""}</td>
+        <td style="color:var(--ink-2)">${esc((r.task||"").slice(0,60))}</td>
+      </tr>`;
+    }).join("");
+    if (state.follow) $("audit-scroll").scrollTop = 0;
+    refreshLastCells();
+  }catch(e){ /* 审计是附加信息，失败不打断 */ }
+}
+
+/** 只改「上次」列，不整表重绘 —— 每 15s 翻新审计时不能让用户滚动位置跳走。 */
+function refreshLastCells(){
+  document.querySelectorAll('#body tr[data-id] td.last').forEach((td)=>{
+    const id = td.parentElement.dataset.id;
+    const last = state.lastRun[id];
+    td.innerHTML = last
+      ? `<span class="st-${last.ok ? "ok" : (last.needs_login ? "warn" : "bad")}">${last.ok ? "OK" : (last.needs_login ? "需登录" : "失败")}</span> ${last.time} · ${last.seconds}s`
+      : `<span style="color:var(--idle)">—</span>`;
+    td.title = last ? (last.task || "") : "本面板还没派发过";
+  });
+}
+
+/* ---------------- 动作 ---------------- */
+async function doDispatch(){
+  const a = state.agents.find(x=>x.id===state.sel);
+  if (!a || state.running) return;
+  const task = $("task").value.trim();
+  if (!task){ toast("任务不能为空"); $("task").focus(); return; }
+  state.running = true;
+  $("run").disabled = true;
+  const t0 = Date.now();
+  $("out-meta").textContent = `派发中 · ${a.id} · 0.0s`;
+  $("out").textContent = "";
+  const tick = setInterval(()=>{
+    $("out-meta").textContent = `派发中 · ${a.id} · ${((Date.now()-t0)/1000).toFixed(1)}s`;
+  }, 200);
+  try{
+    const r = await api("/api/dispatch", {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({ agent:a.id, task, cwd:$("cwd").value.trim(), timeout_seconds:Number($("timeout").value)||0 })
+    });
+    clearInterval(tick);
+    const ok = r.ok;
+    $("out-meta").innerHTML = `${ok?"<span style='color:var(--ok)'>OK</span>":"<span style='color:var(--bad)'>失败</span>"} · ${esc(r.agent||"")} · exit=${r.exit_code ?? "–"} · ${r.seconds ?? ((Date.now()-t0)/1000).toFixed(1)}s`;
+    $("out").textContent = [r.error ? `! ${r.error}` : "", r.output || "(无输出)", r.stderr ? `--- stderr ---\n${r.stderr}` : ""].filter(Boolean).join("\n");
+    if (r.needs_login) { toast("该 CLI 未登录，已标记并跳过"); await loadAgents(); }
+  }catch(e){
+    clearInterval(tick);
+    $("out-meta").textContent = "请求失败";
+    $("out").textContent = String(e);
+  }finally{
+    state.running = false;
+    $("run").disabled = false;
+    loadAudit();
+    $("out").scrollTop = $("out").scrollHeight;
+  }
+}
+
+async function toggleEnabled(){
+  const a = state.agents.find(x=>x.id===state.sel);
+  if (!a) return;
+  const r = await api("/api/enabled", {
+    method:"POST", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({ agent:a.id, enabled: !a.enabled })
+  });
+  if (r.error){ toast(r.error); return; }
+  toast(`${r.agent} → ${r.enabled?"启用":"禁用"}（写入 ${r.config}）`);
+  await loadAgents();
+}
+
+/* ---------------- 键盘 ---------------- */
+function move(delta){
+  const rows = state.view === "routes" ? routeRows() : harnessRows();
+  if (!rows.length) return;
+  const key = state.view === "routes" ? "id" : "id";
+  const idx = rows.findIndex(r=>r[key]===state.sel);
+  const next = rows[Math.max(0, Math.min(rows.length-1, (idx<0?0:idx+delta)))];
+  state.sel = next.id;
+  render();
+  const el = document.querySelector(`tr[data-id="${state.sel}"],tr[data-hid="${state.sel}"]`);
+  if (el) el.scrollIntoView({block:"nearest"});
+}
+
+document.addEventListener("keydown", (e)=>{
+  const inField = /^(INPUT|TEXTAREA)$/.test(e.target.tagName);
+  if (e.key === "/" && !inField){ e.preventDefault(); $("filter").focus(); return; }
+  if (e.key === "Escape"){
+    if (inField){ e.target.blur(); }
+    else { $("filter").value=""; state.filter=""; render(); }
+    return;
+  }
+  if (inField) return;
+  if (e.key === "j" || e.key === "ArrowDown"){ e.preventDefault(); move(1); }
+  if (e.key === "k" || e.key === "ArrowUp"){ e.preventDefault(); move(-1); }
+  if (e.key === "Enter"){ e.preventDefault(); if (state.view==="routes") doDispatch(); }
+  if (e.key === "r"){ e.preventDefault(); loadAgents(); loadAudit(); }
+  if (e.key === "e"){ e.preventDefault(); toggleEnabled(); }
+  if (e.key === "["){ e.preventDefault(); applyAsideFold(!document.body.classList.contains("aside-collapsed")); }
+});
+
+/* ---------------- 事件绑定 ---------------- */
+$("filter").addEventListener("input", (e)=>{ state.filter = e.target.value.trim(); render(); });
+$("tbl").addEventListener("click", (e)=>{
+  const probe = e.target.closest("[data-probe]");
+  if (probe){ e.stopPropagation(); probeVersion(probe.dataset.probe); return; }
+  const inst = e.target.closest("[data-install]");
+  if (inst){ e.stopPropagation(); doInstall(inst.dataset.install, inst.dataset.kind); return; }
+  const skill = e.target.closest("[data-skill]");
+  if (skill){ e.stopPropagation(); doInstallSkill(skill.dataset.skill); return; }
+  const locate = e.target.closest("[data-locate]");
+  if (locate){ e.stopPropagation(); doLocate(locate.dataset.locate, locate.dataset.kind); return; }
+  const tr = e.target.closest("tr[data-id],tr[data-hid]");
+  if (!tr) return;
+  if (tr.dataset.id){ select(tr.dataset.id, {focus:false}); }
+  else {
+    const cmd = `python skill/neko-bridge/install.py --apply --only ${tr.dataset.hid}`;
+    navigator.clipboard?.writeText(cmd).then(
+      ()=>toast(`已复制：${cmd}`),
+      ()=>toast(cmd)
+    );
+  }
+});
+$("tbl").addEventListener("dblclick", (e)=>{
+  const tr = e.target.closest("tr[data-id]");
+  if (tr){ select(tr.dataset.id); $("task").focus(); }
+});
+/* ---- 列宽：拖拽表头右缘 / 双击复位 ---- */
+$("head").addEventListener("pointerdown", (e)=>{
+  const handle = e.target.closest(".rz");
+  if (!handle) return;
+  const key = handle.dataset.rz;
+  const col = $("cols").querySelector(`col[data-k="${key}"]`);
+  if (!col) return;
+  const base = allCols().find(c => c.k === key);
+  const startX = e.clientX;
+  const startW = col.getBoundingClientRect().width;
+  handle.dataset.drag = "true";
+  document.body.style.cursor = "col-resize";
+  const move = (ev)=>{
+    const w = Math.max(base.min, Math.round(startW + (ev.clientX - startX)));
+    col.style.width = w + "px";
+    COLW[key] = w;
+  };
+  const up = ()=>{
+    handle.dataset.drag = "false";
+    document.body.style.cursor = "";
+    window.removeEventListener("pointermove", move);
+    window.removeEventListener("pointerup", up);
+    saveColW();
+  };
+  window.addEventListener("pointermove", move);
+  window.addEventListener("pointerup", up);
+  e.preventDefault();
+});
+$("head").addEventListener("dblclick", (e)=>{
+  const handle = e.target.closest(".rz");
+  if (!handle) return;
+  delete COLW[handle.dataset.rz];
+  saveColW();
+  render();
+});
+
+/* 窗口变窄/变宽时列集合会变，必须重绘（表头与单元格同源，才不会错位） */
+let _rzTimer = 0;
+window.addEventListener("resize", ()=>{
+  clearTimeout(_rzTimer);
+  _rzTimer = setTimeout(()=>{
+    const key = visibleCols().map(c => c.k).join(",");
+    if (key !== lastColKey) render();
+  }, 120);
+});
+
+/* ---- 分栏宽度：拖拽 + 双击复位 ---- */
+const ASIDE_MIN = 240, ASIDE_MAX = 860, ASIDE_DEFAULT = 380;
+function setAsideWidth(px){
+  const w = Math.max(ASIDE_MIN, Math.min(ASIDE_MAX, Math.round(px)));
+  document.documentElement.style.setProperty("--aside-w", w + "px");
+  try{ localStorage.setItem("ab-aside-w", String(w)); }catch{}
+  return w;
+}
+{
+  const sp = $("splitter");
+  let dragging = false;
+  sp.addEventListener("pointerdown", (e)=>{
+    dragging = true; sp.dataset.drag = "true";
+    try{ sp.setPointerCapture(e.pointerId); }catch{}
+    e.preventDefault();
+  });
+  window.addEventListener("pointermove", (e)=>{
+    if (!dragging) return;
+    setAsideWidth(window.innerWidth - e.clientX - 3);
+  });
+  const stop = ()=>{ if(!dragging) return; dragging = false; sp.dataset.drag = "false"; };
+  window.addEventListener("pointerup", stop);
+  window.addEventListener("pointercancel", stop);
+  sp.addEventListener("dblclick", ()=>setAsideWidth(ASIDE_DEFAULT));
+}
+
+/* ---- 收纳：右侧面板 / 日志条 ---- */
+function applyAsideFold(collapsed){
+  document.body.classList.toggle("aside-collapsed", collapsed);
+  const btn = $("fold-aside");
+  btn.dataset.on = collapsed ? "false" : "true";
+  btn.title = collapsed ? "展开右侧面板（[）" : "收起右侧面板（[）";
+  try{ localStorage.setItem("ab-aside-off", collapsed ? "1" : "0"); }catch{}
+}
+function applyLogFold(collapsed){
+  document.body.classList.toggle("log-collapsed", collapsed);
+  const btn = $("fold-log");
+  btn.dataset.on = collapsed ? "false" : "true";
+  btn.textContent = collapsed ? "日志▸" : "日志";
+  try{ localStorage.setItem("ab-log-off", collapsed ? "1" : "0"); }catch{}
+}
+$("fold-aside").addEventListener("click", ()=>applyAsideFold(!document.body.classList.contains("aside-collapsed")));
+$("fold-log").addEventListener("click", ()=>applyLogFold(!document.body.classList.contains("log-collapsed")));
+
+/* ---- 日志跟随锁定 ---- */
+function syncFollow(){
+  const el = $("follow");
+  el.dataset.on = state.follow ? "true" : "false";
+  el.textContent = state.follow ? "跟随中" : "跟随";
+  $("follow-hint").style.display = state.follow ? "none" : "";
+  if (state.follow) $("audit-scroll").scrollTop = 0;
+}
+$("audit-scroll").addEventListener("scroll", ()=>{
+  const atTop = $("audit-scroll").scrollTop <= 4;
+  if (atTop === state.follow) return;
+  state.follow = atTop;          // 往下翻 = 看历史，自动解锁；回到顶部 = 自动锁定
+  syncFollow();
+});
+$("follow").addEventListener("click", ()=>{ state.follow = true; syncFollow(); });
+
+/* ---- 日志区高度（无级） ---- */
+function applyLogHeight(px){
+  document.querySelector("footer").style.flex = `0 0 ${px}px`;
+}
+$("log-height").addEventListener("input", (e)=>{
+  applyLogHeight(e.target.value);
+  localStorage.setItem("ab-logh", e.target.value);
+});
+
+/* ---- 超时（无级） ---- */
+function fmtTimeout(sec){
+  const m = Math.floor(sec / 60), r = sec % 60;
+  return `${m}:${String(r).padStart(2, "0")}`;
+}
+function syncTimeout(){
+  const sec = Number($("timeout").value) || 300;
+  $("timeout-val").textContent = fmtTimeout(sec);
+}
+$("timeout").addEventListener("input", syncTimeout);
+
+$("run").addEventListener("click", doDispatch);
+$("probe-all").addEventListener("click", probeAll);
+$("toggle").addEventListener("click", toggleEnabled);
+$("task").addEventListener("keydown", (e)=>{
+  if (e.key === "Enter" && !e.shiftKey){ e.preventDefault(); doDispatch(); }
+});
+$("tab-routes").addEventListener("click", ()=>{ state.view="routes"; state.sel=null; $("tab-routes").ariaSelected="true"; $("tab-harness").ariaSelected="false"; render(); });
+$("tab-harness").addEventListener("click", async ()=>{ state.view="harness"; state.sel=null; $("tab-routes").ariaSelected="false"; $("tab-harness").ariaSelected="true"; await loadHarness(); render(); });
+
+{
+  const w = Number(localStorage.getItem("ab-aside-w"));
+  if (w >= ASIDE_MIN && w <= ASIDE_MAX) setAsideWidth(w);
+  applyAsideFold(localStorage.getItem("ab-aside-off") === "1");
+  applyLogFold(localStorage.getItem("ab-log-off") === "1");
+
+  const saved = Number(localStorage.getItem("ab-logh"));
+  if (saved >= 80 && saved <= 460){ $("log-height").value = saved; applyLogHeight(saved); }
+  syncTimeout();
+  syncFollow();
+}
+
+if (localStorage.getItem("ab-guide") === "off") $("guide").classList.add("hidden");
+$("warn-close").addEventListener("click", ()=>$("warn").classList.add("hidden"));
+
+$("guide-close").addEventListener("click", ()=>{
+  $("guide").classList.add("hidden");
+  localStorage.setItem("ab-guide", "off");
+});
+
+setInterval(()=>{ $("clock").textContent = new Date().toTimeString().slice(0,8); }, 1000);
+$("clock").textContent = new Date().toTimeString().slice(0,8);
+
+checkHealth().then(loadAgents).then(loadHarness).then(loadAudit).catch((e)=>{
+  $("empty").classList.remove("hidden");
+  $("empty").textContent = `无法连接后端：${e}. 确认 python webui/server.py 在跑。`;
+});
+setInterval(loadAudit, 15000);
+</script>
+</body>
+</html>

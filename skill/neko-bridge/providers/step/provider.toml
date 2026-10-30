@@ -1,0 +1,29 @@
+# StepCode 路由声明（阶跃星辰）。
+
+schema = 1
+
+[provider]
+id = "step"
+label = "StepCode CLI（阶跃）"
+binary = "step"
+mode = "switch"                     # `--print, -p` 是布尔开关，正文走位置参数
+prompt_flag = "-p"
+model_flag = "--model"
+version_args = ["--version"]
+aliases = ["stepcode"]
+notes = "本机在 ~/.stepcode/bin/step.exe（未进 PATH，靠兜底目录找到）"
+
+hints = [
+    "**响应很慢**：未登录时 `-p` 会静默挂起 40s 以上、stdout/stderr 全空 —— 面板会把它标成「慢/待验证」，不要以为它死了。",
+    "先跑一次 `step auth` 完成登录，再派发；未登录时连错误信息都没有，只能靠超时判定。",
+    "--sdk-stdio 是 SDK 宿主模式，不是任务入口，别用。",
+]
+
+# 未观测到真实的鉴权失败措辞（挂起时不输出任何东西），先留空；
+# 等 `step auth` 之后实测再补，见 README 的待办。
+fail_patterns = []
+# 它不是"没匹配到措辞"，而是**根本没有输出**：未登录时挂到超时。
+# 这类只能靠 runner 的超时判定，写正则没有意义。
+failure_mode = "timeout"
+
+install_hint = "StepCode 通过其发行包安装，本机已在 ~/.stepcode；无包管理器命令可复用"

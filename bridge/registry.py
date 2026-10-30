@@ -53,8 +53,17 @@ class AgentSpec:
 
     mode: str
     """任务描述的传递方式：
-    - "flag"       用 prompt_flag 指定的开关携带，例如 `omp -p "<task>"`
-    - "positional" 作为位置参数追加在固定参数之后，例如 `opencode run "<task>"`
+
+    - "flag"       用 prompt_flag 指定的开关携带，例如 `omp -p "<task>"`；
+                   开关自身要吃值（`-p, --prompt <string>`）。
+    - "switch"     prompt_flag 是**布尔开关**，任务正文作为位置参数跟在后面，
+                   例如 `pi -p "<task>"` 与 `cmd -p "<query>"`（取值可选）。
+                   与 flag 的区别只在语义：这类 CLI 的 `-p` 单独出现就够，
+                   正文是位置参数，所以顺序是「先开关、后正文」。
+    - "positional" 作为位置参数追加在固定参数之后，例如 `opencode run "<task>"`。
+
+    switch 与 flag 拼出来的 argv 形状相同，但**分开登记**是为了让清单自解释：
+    新接一个 CLI 时，「-p 后面到底跟不跟值」正是最容易写错的一处。
     """
 
     fixed_args: tuple[str, ...] = ()
@@ -67,6 +76,50 @@ class AgentSpec:
     notes: str = ""
     hints: tuple[str, ...] = field(default_factory=tuple)
     """已知限制或运维提示，会在 agents_list / agent_doctor 中回显。"""
+
+    aliases: tuple[str, ...] = field(default_factory=tuple)
+    """这个 Agent 额外接受的调用名（来自 provider 清单，已过全局去重）。
+
+    内置 Agent 的别名仍写在模块级 ``ALIASES`` 里 —— 两者最终合并进同一张表，
+    ``canonical_id`` 不区分来源。
+    """
+
+    auth_patterns: tuple[str, ...] = field(default_factory=tuple)
+    """**这个 Agent 专属**的鉴权失败特征（正则片段，大小写不敏感）。
+
+    全局那组 ``runner._AUTH_PATTERNS`` 是按前 9 个 CLI 的实际措辞写的，换一个产品
+    就会漏判 —— 实测 gemini 的 "Please set an Auth method … GEMINI_API_KEY" 与
+    command-code 的 "Authentication failed. Please run \"cmdc login\" first."
+    都不在里面。它们退出码非 0（41 / 3），漏判的后果是「被报成普通 FAILED」：
+    不进 ``needs_login`` 集合、不被跳过、也不提示换一个 Agent。所以每个新 Agent
+    必须自带特征，别指望全局表覆盖。
+    """
+
+    login_hint: str = ""
+    """登录/鉴权失败的处置提示（例如 `gemini` 要设 GEMINI_API_KEY）。回显在 notes 之后。"""
+
+    install_cmd: str = ""
+    """一键安装命令（白名单：只来自清单，永不来自请求体）。
+
+    面板上「未安装 → 装一个」按钮执行的就是它；执行完立刻回读可执行状态与版本，
+    装成功按钮才消失。
+    """
+
+    install_hint: str = ""
+    """没有一键安装时给人工步骤（官网/包名/前置条件）。"""
+
+    fail_patterns: tuple[str, ...] = field(default_factory=tuple)
+    """**非鉴权**的运行期失败特征（正则片段，大小写不敏感）。
+
+    有些 CLI 的"跑不了"既不是登录问题、也不给非 0 退出码。实测 hermes：
+
+        $ hermes -z "reply OK"
+        Error: Gateway inaccessible: service_manager_unavailable
+        $ echo $?      # → 0
+
+    退出码 0、stdout 空，于是被判成「成功，输出是这行 Error」。这类必须和
+    ``auth_patterns`` 分开：处置动作完全不同（一个去登录，一个去起服务）。
+    """
 
 
 # --------------------------------------------------------------------------
@@ -166,11 +219,18 @@ AGENT_SPECS: dict[str, AgentSpec] = {
 }
 
 # 常见别名，方便人手调用（MCP 客户端会通过 enum 限制取值，这里主要给人用）
+#
+# ⚠️ 曾经这里有一条 `"pi": "omp"`。**它是错的，已移除**：
+#    `omp` 的真名是 `@oh-my-pi/pi-coding-agent`（v18.x），而 PATH 上的 `pi`
+#    来自另一个包 `@earendil-works/pi-coding-agent`（v1.x）—— 两个产品，
+#    共用了一个可执行名。实测 `pi --version` → 1.4.0，`omp --version` → 18.12.6。
+#    保留那条别名等于「按 pi 却跑 omp」，而且真正的 pi 永远调不到。
+#    现在 `pi` 是独立登记的路由（providers/pi），omp 用 `omp` / `oh-my-pi` / `ompi`。
 ALIASES: dict[str, str] = {
     "cbc": "codebuddy",
     "codebuddy-code": "codebuddy",
     "oh-my-pi": "omp",
-    "pi": "omp",
+    "ompi": "omp",
     "oc": "opencode",
     "claw": "openclaw",
     "atom": "atomcode",
@@ -199,6 +259,40 @@ _SEPARATORS = frozenset({"&", "&&", "|", "||"})
 """shim 里把「准备动作」和「真正启动」分开的命令分隔符。"""
 _CMD_EXT = (".cmd", ".bat")
 _EXE_EXT = (".exe", ".com")
+
+#: PATH 找不到时的兜底搜索目录（只在这些目录里找可执行文件，不递归）。
+#:
+#: 为什么需要：``shutil.which`` 只看 ``PATH``，而宿主进程（N.E.K.O 的嵌入式 Python、
+#: IDE 里起的任务）常常**没有继承**用户 shell 的 ``PATH``。这时 ``~/.bun/bin`` 里的
+#: ``omp.exe`` 明明在，却会被判成 ``missing``，报错还写「未在 PATH 中找到」。
+#:
+#: bun 的安装形态有一处必须知道：它**同时**写 ``X.bunx``（装载脚本，不是可执行文件）
+#: 和 ``X.exe``（8 KiB 的 PE 桩）。``which`` 命中 ``.exe`` 所以能直接 CreateProcess；
+#: 自己按名字找文件时必须优先挑 ``.exe``，绝不能把 ``.bunx`` 交给 CreateProcess。
+_EXTRA_BIN_DIRS = (
+    "~/.bun/bin",                 # bun add -g
+    "~/AppData/Roaming/npm",      # npm -g（Windows）
+    "~/.local/bin",               # pipx / uv
+    "~/.stepcode/bin",            # StepCode（自带安装器）
+    "~/AppData/Local/hermes/bin", # Hermes（git 安装）
+    "~/.qwenpaw/bin",             # QwenPaw
+    "~/AppData/Local/AtomCode",   # AtomCode
+    "~/AppData/Local/evox/bin",   # EvoX
+    "/usr/local/bin",
+)
+
+
+def _find_extra(binary: str) -> str | None:
+    """在兜底目录里找 ``binary``，优先可执行扩展名，跳过 ``.bunx`` 这类装载脚本。"""
+    for directory in _EXTRA_BIN_DIRS:
+        base = os.path.expanduser(directory)
+        if not os.path.isdir(base):
+            continue
+        for ext in (*_EXE_EXT, *_CMD_EXT):
+            candidate = os.path.join(base, binary + ext)
+            if os.path.isfile(candidate):
+                return candidate
+    return None
 _SCRIPT_INTERPRETERS = {
     ".js": "node",
     ".mjs": "node",
@@ -489,9 +583,14 @@ def resolve_agent(spec: AgentSpec, override_exe: str | None = None) -> ResolvedC
         elif override_exe.strip():
             _log_warning(f"exe_override 为空或不可用：{override_exe!r}（agent={spec.id}），已忽略")
 
-    found = shutil.which(spec.binary)
+    found = shutil.which(spec.binary) or _find_extra(spec.binary)
     if not found:
-        return ResolvedCommand(spec.binary, source="missing", exists=False, detail="未在 PATH 中找到")
+        return ResolvedCommand(
+            spec.binary,
+            source="missing",
+            exists=False,
+            detail=f"未在 PATH 或 {', '.join(_EXTRA_BIN_DIRS)} 中找到",
+        )
 
     lowered = found.lower()
     if not lowered.endswith(_CMD_EXT):
@@ -532,6 +631,12 @@ def build_argv(
         if not spec.prompt_flag:
             raise ValueError(f"agent '{spec.id}' 的 mode=flag 但缺少 prompt_flag")
         argv += [spec.prompt_flag, task]
+    elif spec.mode == "switch":
+        # 开关是布尔的（`--print` / `-p`），正文跟后面。拼出来与 flag 同形，
+        # 但登记时分开写，避免把「不吃值的开关」误写成 flag 后在真机上才发现。
+        if not spec.prompt_flag:
+            raise ValueError(f"agent '{spec.id}' 的 mode=switch 但缺少 prompt_flag")
+        argv += [spec.prompt_flag, task]
     elif spec.mode == "positional":
         argv.append(task)
     else:
@@ -566,3 +671,49 @@ def redact_argv(argv: list[str], task: str) -> list[str]:
 
 def list_specs() -> list[AgentSpec]:
     return [AGENT_SPECS[key] for key in sorted(AGENT_SPECS)]
+
+
+# --------------------------------------------------------------------------
+# provider 数据化登记 —— 在**导入期**合并，不能延迟
+# --------------------------------------------------------------------------
+#
+# 为什么必须在 import 时完成：`__init__.py` 把 `_AGENT_IDS` / `_AGENT_HINT` 烘进了
+# `@plugin_entry` / `@llm_tool` 的 description（装饰器参数在**类定义时**求值）。
+# 如果改成运行期按需加载，新增的 Agent 会「能跑但不在描述里」—— 模型永远看不到它。
+# 所以这里在模块末尾就把 providers/ 合并进 AGENT_SPECS。
+
+_PROVIDER_SOURCE: str = ""
+_PROVIDER_WARNINGS: list[str] = []
+
+
+def _merge_providers() -> None:
+    """把 providers/ 下的清单并进 AGENT_SPECS / ALIASES（只取第一个存在的根）。
+
+    只取第一个：多个根同时合并时，后一个里的同 id 清单会被判成「撞名」而刷一堆
+    无意义告警。按 ``providers.provider_roots()`` 的顺序取第一个可用目录，
+    符合「环境变量覆盖部署目录」的直觉。
+    """
+    global _PROVIDER_SOURCE
+    from .providers import load_into, provider_roots
+
+    for root in provider_roots():
+        if not os.path.isdir(root):
+            continue
+        _PROVIDER_SOURCE = root
+        _PROVIDER_WARNINGS.extend(
+            load_into(AGENT_SPECS, ALIASES, root=root, spec_factory=AgentSpec)
+        )
+        break
+
+
+def provider_source() -> str:
+    """这次启动实际读了哪个 providers 目录（诊断用；没有就是空串）。"""
+    return _PROVIDER_SOURCE
+
+
+def provider_warnings() -> list[str]:
+    """provider 清单的加载告警（诊断用）。"""
+    return list(_PROVIDER_WARNINGS)
+
+
+_merge_providers()

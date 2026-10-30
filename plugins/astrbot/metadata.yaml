@@ -1,0 +1,5 @@
+name: agent_bridge
+desc: 把本机编码 Agent（CodeBuddy / Claude Code / Gemini / omp / OpenCode …）接进 AstrBot：一条命令派活，另一条看谁可用。
+version: 0.1.0
+author: local
+repo: https://github.com/addsas222/n.e.k.o_plugin_agent_bridge

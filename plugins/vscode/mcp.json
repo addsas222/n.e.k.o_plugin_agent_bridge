@@ -1,0 +1,12 @@
+{
+  "servers": {
+    "agent_bridge": {
+      "type": "stdio",
+      "command": "python",
+      "args": ["${workspaceFolder}/skill/neko-bridge/bin/neko.py", "mcp"],
+      "env": {
+        "NEKO_BRIDGE_PROVIDERS": "${workspaceFolder}/providers"
+      }
+    }
+  }
+}

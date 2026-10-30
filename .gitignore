@@ -22,3 +22,7 @@ static/cache/
 
 # --- pytest tmp_path 残留目录 ----------------------------------------------
 pytest-cache-files-*/
+
+# --- 只读清点的产物：含本机路径与软件清单，不入公共仓库 --------------------
+# 需要时本地跑 tools/inventory.py 重新生成。
+docs/harness-inventory.md

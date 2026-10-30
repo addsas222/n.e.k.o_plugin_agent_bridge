@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import re
 import subprocess
@@ -23,7 +24,7 @@ import sys
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Iterable
 
 from .config import BridgeConfig, normalize_path
 from .registry import (
@@ -85,13 +86,68 @@ _AUTH_PATTERNS = (
 """「这台 CLI 还没登录」的常见措辞（中英文都收）。"""
 
 
-def _detect_auth_failure(stdout: str, stderr: str) -> str:
+def _compile_extra_patterns(extra_patterns: Iterable[str]) -> tuple[re.Pattern[str], ...]:
+    """把清单里声明的额外鉴权特征编译成正则，坏正则只丢这一条。
+
+    清单是**外部数据**（用户可以手改），一条写错的正则不该让每次派发都抛
+    ``re.error`` —— 那会把「未登录」变回「调用失败」，掩盖真正的原因。
+    """
+    compiled: list[re.Pattern[str]] = []
+    for raw in extra_patterns or ():
+        text = str(raw or "").strip()
+        if not text:
+            continue
+        try:
+            compiled.append(re.compile(text, re.IGNORECASE))
+        except re.error:
+            logging.getLogger(__name__).warning(f"auth_patterns 里的正则无效，已忽略：{text!r}")
+    return tuple(compiled)
+
+
+def _match_head(stdout: str, stderr: str, patterns: Iterable[re.Pattern[str]]) -> str:
+    """在 stderr 开头找第一个命中的特征，返回**命中那一行**（否则空串）。
+
+    三条门槛与鉴权判定共用：stderr 要短、只看开头、stdout 不能有实质内容。
+    """
+    text = (stderr or "").strip()
+    if not text or len(text) > _AUTH_MAX_CHARS:
+        return ""
+    head = text[:_AUTH_HEAD_CHARS]
+    matched = next((p for p in patterns if p.search(head)), None)
+    if matched is None or _has_substantive_output(stdout):
+        return ""
+    for line in text.splitlines():
+        if line.strip() and matched.search(line):
+            return line.strip()
+    return next((line.strip() for line in text.splitlines() if line.strip()), head[:120])
+
+
+def _detect_auth_failure(
+    stdout: str,
+    stderr: str,
+    extra_patterns: Iterable[str] = (),
+) -> str:
     """识别「CLI 因为没登录而拒绝干活」，返回提示首行；不是这种情况就返回空串。
 
     **为什么必须单独判**：这些 CLI 未登录时**退出码是 0**，只往 stderr 打一行
     「Authentication required. Please use /login command to sign in」。
     于是 ``AgentResult.ok`` 判定为成功，那行登录提示被当成「任务输出」原样交给
     上层模型 —— 模型只能从一段莫名其妙的输出里猜「哦原来要登录」。
+
+    **为什么还要 ``extra_patterns``**：下面 ``_AUTH_PATTERNS`` 是按最初 9 个 CLI 的
+    真实措辞写的，换个产品就会漏。实测两个新 Agent 都会漏判：
+
+    - gemini：``Please set an Auth method in your …settings.json or specify one of
+      the following environment variables before running: GEMINI_API_KEY, …``
+      （退出码 **41**）
+    - command-code：``Error: Authentication failed. Please run "cmdc login" first.``
+      （退出码 **3**）
+
+    漏判的后果不是「假成功」而是「说不清」：它们退出码非 0，于是被报成普通 FAILED，
+    既不进 ``needs_login`` 集合（不会被跳过），也不提示「这台没登录，换一个」。
+    而且同一族 CLI 里也有给 0 的（claude 就是），所以只靠退出码无法覆盖。
+    每个 Agent 在 ``providers/<id>/provider.toml`` 里自带 ``auth_patterns``，
+    由 ``run_agent`` 透传进来。全局表继续兜住老 Agent，新 Agent 不必改这里一行代码。
 
     **不能要求 stdout 为空**：启动期真出问题时，CLI 往往先往 stdout 打几行噪声
     （codebuddy 的 PowerShell 警告就是），登录提示照样在 stderr 里，一旦用
@@ -106,11 +162,8 @@ def _detect_auth_failure(stdout: str, stderr: str) -> str:
     text = (stderr or "").strip()
     if not text or len(text) > _AUTH_MAX_CHARS:
         return ""
-    if not any(pattern.search(text[:_AUTH_HEAD_CHARS]) for pattern in _AUTH_PATTERNS):
-        return ""
-    if _has_substantive_output(stdout):
-        return ""
-    return next((line.strip() for line in text.splitlines() if line.strip()), text[:120])
+    patterns = _AUTH_PATTERNS + _compile_extra_patterns(extra_patterns)
+    return _match_head(stdout, stderr, patterns)
 
 
 def _has_substantive_output(stdout: str) -> bool:
@@ -482,12 +535,21 @@ async def run_agent(
 
     # 未登录的 CLI 会「退出码 0 + stderr 一行登录提示」，不特判就会被当成成功，
     # 上层模型拿到的 output 就是那行提示，只能自己猜为什么没干活。
+    # 逐 Agent 的 auth_patterns 一并传进去：全局表只覆盖了最初 9 个 CLI 的措辞。
     needs_login = False
     if not timed_out and not error:
-        auth_line = _detect_auth_failure(stdout, stderr)
+        auth_line = _detect_auth_failure(stdout, stderr, spec.auth_patterns)
         if auth_line:
             needs_login = True
-            error = f"AGENT_NEEDS_LOGIN: {auth_line}"
+            hint = f"（{spec.login_hint}）" if spec.login_hint else ""
+            error = f"AGENT_NEEDS_LOGIN: {auth_line}{hint}"
+
+    # 非鉴权的运行期失败：退出码 0，只在 stderr 说一句「服务没起来」。
+    # 与上面互斥 —— 先认登录、再认运行期，否则同一行会被归成两类。
+    if not timed_out and not error and spec.fail_patterns:
+        fail_line = _match_head(stdout, stderr, _compile_extra_patterns(spec.fail_patterns))
+        if fail_line:
+            error = f"AGENT_RUNTIME_ERROR: {fail_line}"
 
     extra: dict[str, object] = {}
     if workdir:
@@ -514,6 +576,7 @@ async def probe_version(
     resolved: ResolvedCommand,
     *,
     config: BridgeConfig,
+    timeout: int = 45,
 ) -> str:
     """取一个 Agent 的版本号，用于 agents_list / agent_doctor。
 
@@ -525,7 +588,7 @@ async def probe_version(
     exit_code, stdout, stderr, timed_out, _, _ = await _execute(
         build_version_argv(spec, resolved),
         cwd=None,
-        timeout=45,
+        timeout=timeout,
         output_limit=8192,
         env_overrides=override.env or None,
     )
@@ -543,7 +606,7 @@ async def probe_version(
     _, retry_out, retry_err, retry_timed_out, _, _ = await _execute(
         build_version_argv(spec, resolved, with_fixed_args=False),
         cwd=None,
-        timeout=45,
+        timeout=timeout,
         output_limit=8192,
         env_overrides=override.env or None,
     )

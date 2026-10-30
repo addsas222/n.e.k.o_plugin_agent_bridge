@@ -1,0 +1,765 @@
+# Harness 矩阵：每个 Agent 框架「skill 装到哪、插件（MCP）怎么注册」。
+#
+# 这张表是唯一需要手改的地方。skill 本体只有一份（skill/neko-bridge/），
+# 各框架的差异是**安装位置**和**注册方式**，所以不生成 N 份重复的 SKILL.md。
+#
+# source = "local"  本机实测该目录/配置存在（2026-10-30）
+# source = "docs"   取自各工具文档/社区约定，未在本机验证 —— 装之前先 `ls` 一下
+#
+# 跨工具事实（决定了下面为什么 .agents/skills 排第一）：
+#   * `.agents/skills/` 是多个 harness 共用的公共位，Codex 会从 cwd 向上原生扫描；
+#     Amp / Cursor / Copilot / Antigravity 也会读它。
+#   * AGENTS.md 已成为跨工具事实标准（Linux Foundation / Agentic AI Foundation 治理）；
+#     Claude Code 需要 CLAUDE.md 软链或 @import，其余多数直接读。
+#   * 只有 Claude Code / Codex / Codex-style harness 把「插件」做成打包单位；
+#     其余工具的「插件」实际就是 MCP server + skills 目录。
+#
+# kind:
+#   cli     有可执行 CLI，可被 agent_bridge **派发**
+#   ide     只有 IDE/扩展形态，不可派发；它的「插件」= MCP 注册 + skill 目录
+#   generic 通用位置，多数 harness 都会读
+#
+# mcp_kind:
+#   cli   用 mcp_command 注册（{name} / {bin} 占位替换）
+#   file  往 mcp_target 的 mcpServers 里加（只打印片段，不自动改用户配置）
+#   none  没有稳定 MCP 机制（用 skill 直接派发即可）
+
+# ---------------------------------------------------------------- 通用位
+[[harness]]
+id = "agents"
+label = "通用 .agents（跨工具公共位）"
+kind = "generic"
+skills_dir = "~/.agents/skills"
+mcp_kind = "file"
+mcp_target = "~/.agents/mcp-settings.json"
+verified = true
+source = "local"
+note = "Codex 原生扫描；Amp/Cursor/Copilot/Antigravity 也读这里。优先装这一处"
+
+# ---------------------------------------------------------------- CLI（可派发）
+[[harness]]
+id = "codebuddy"
+label = "CodeBuddy（腾讯：CLI + IDE + 插件）"
+kind = "cli"
+skills_dir = "~/.codebuddy/skills"
+mcp_kind = "none"
+verified = true
+source = "local"
+install_cmd = "bun add -g @tencent-ai/codebuddy-code"
+form = "cli"
+note = "~/.codebuddy 下 settings.json + skills/ 都在；CLI 侧已有一条可派发路由"
+
+[[harness]]
+id = "commandcode"
+label = "Command Code（宿主位）"
+kind = "cli"
+skills_dir = "~/.commandcode/skills"
+mcp_kind = "file"
+mcp_target = "~/.commandcode/mcp.json"
+verified = true
+source = "local"
+install_cmd = "bun add -g command-code"
+form = "cli"
+note = "路由 id 是 command-code，宿主目录却是 ~/.commandcode（无连字符）；mcp.json 已存在"
+
+[[harness]]
+id = "qoder-cn"
+label = "Qoder CN（通义灵码升级版）"
+kind = "ide"
+skills_dir = "~/.qoder-cn/skills"
+mcp_kind = "none"
+verified = true
+source = "local"
+note = "与 qoder 是不同安装位；多模型切换"
+
+[[harness]]
+id = "claude"
+label = "Claude Code（Anthropic）"
+kind = "cli"
+skills_dir = "~/.claude/skills"
+mcp_kind = "cli"
+mcp_command = 'claude mcp add {name} -- python "{bin}" mcp'
+verified = true
+source = "local"
+install_cmd = "npm i -g @anthropic-ai/claude-code"
+form = "cli"
+
+[[harness]]
+id = "codex"
+label = "OpenAI Codex"
+kind = "cli"
+skills_dir = "~/.codex/skills"
+mcp_kind = "cli"
+mcp_command = 'codex mcp add {name} -- python "{bin}" mcp'
+verified = true
+source = "local"
+install_cmd = "npm i -g @openai/codex"
+form = "cli"
+note = "也原生扫描 .agents/skills（从 cwd 向上）；两处装一处就够"
+
+[[harness]]
+id = "gemini"
+label = "Gemini CLI"
+kind = "cli"
+skills_dir = "~/.gemini/skills"
+mcp_kind = "cli"
+mcp_command = 'gemini mcp add {name} python "{bin}" mcp'
+verified = false
+source = "docs"
+install_cmd = "bun add -g @google/gemini-cli"
+form = "cli"
+note = "命令形状按 `gemini mcp --help` 核对后再跑；扩展机制另见 `gemini extensions`"
+
+[[harness]]
+id = "command-code"
+label = "Command Code"
+kind = "cli"
+skills_dir = "~/.command-code/skills"
+mcp_kind = "cli"
+mcp_command = 'cmd mcp add {name} -- python "{bin}" mcp'
+verified = false
+source = "docs"
+note = "支持 --skill <path> 直接加载，可以不装到全局目录"
+
+[[harness]]
+id = "opencode"
+label = "OpenCode"
+kind = "cli"
+skills_dir = "~/.config/opencode/skills"
+mcp_kind = "file"
+mcp_target = "~/.config/opencode/opencode.json"
+verified = true
+source = "local"
+install_cmd = "bun add -g @opencode/cli"
+form = "cli"
+note = "配置已存在；也支持 `opencode mcp add`。原生读 AGENTS.md"
+
+[[harness]]
+id = "omp"
+label = "Oh My Pi"
+kind = "cli"
+skills_dir = "~/.omp/agent/skills"
+mcp_kind = "file"
+mcp_target = "~/.omp/agent/mcp.json"
+verified = true
+source = "local"
+install_cmd = "bun add -g @oh-my-pi/pi-coding-agent"
+form = "cli"
+
+[[harness]]
+id = "evox"
+label = "EvoX"
+kind = "cli"
+skills_dir = "~/.evox/agent/skills"
+mcp_kind = "none"
+verified = true
+source = "local"
+
+[[harness]]
+id = "dsh"
+label = "DeepSeek Harness"
+kind = "cli"
+skills_dir = "~/.dsh/.agent-presets/*/skills"
+mcp_kind = "none"
+verified = true
+source = "local"
+note = "CLI 不在 PATH（路由标 missing），但**桌面 App 已装**：%LOCALAPPDATA%\\Programs\\DeepSeek Harness\\DeepSeek Harness.exe；~/.dsh 有 3 个 preset 目录"
+
+[[harness]]
+id = "qwenpaw"
+label = "QwenPaw"
+kind = "cli"
+skills_dir = "~/.qwenpaw/workspaces/*/skills"
+mcp_kind = "none"
+verified = true
+source = "local"
+note = "另有 ~/.qwenpaw/skill_pool/（全局技能池），装 skill 时两处都要看"
+
+[[harness]]
+id = "stepcode"
+label = "StepCode（阶跃）"
+kind = "cli"
+skills_dir = "~/.stepcode/skills"
+mcp_kind = "none"
+verified = true
+source = "local"
+note = "CLI 名是 step（~/.stepcode/bin/step.exe）。有 --print/-p，但实测未登录时**静默挂起 40s+ 零输出**，所以先不接路由；跑一次 `step auth` 再考虑"
+
+[[harness]]
+id = "atomcode"
+label = "AtomCode"
+kind = "cli"
+skills_dir = "~/.atomcode/skills"
+mcp_kind = "file"
+mcp_target = "~/.atomcode/.mcp.json"
+verified = false
+source = "docs"
+note = "`atomcode setup` 会把 skills/commands/hooks/MCP 种到 ~/.atomcode/"
+
+[[harness]]
+id = "openclaw"
+label = "OpenClaw"
+kind = "cli"
+skills_dir = "~/.openclaw/skills"
+mcp_kind = "none"
+verified = false
+source = "docs"
+install_cmd = "bun add -g openclaw"
+form = "cli"
+
+[[harness]]
+id = "pi"
+label = "pi（@earendil-works/pi-coding-agent）"
+kind = "cli"
+skills_dir = "~/.pi/skills"
+mcp_kind = "none"
+verified = false
+source = "docs"
+install_cmd = "bun add -g @earendil-works/pi-coding-agent"
+form = "cli"
+note = "更稳的用法是 --skill <path> 直接加载，不依赖全局目录"
+
+[[harness]]
+id = "qwen-code"
+label = "Qwen Code"
+kind = "cli"
+skills_dir = "~/.qwen/skills"
+mcp_kind = "none"
+verified = false
+source = "docs"
+note = "Qwen 生态；OWEN.md / AGENTS.md 都读"
+
+[[harness]]
+id = "crush"
+label = "Crush（Charmbracelet）"
+kind = "cli"
+skills_dir = "~/.config/crush/skills"
+mcp_kind = "file"
+mcp_target = "~/.config/crush/crush.json"
+verified = false
+source = "docs"
+note = "Go 写的 LSP-aware agent；读 CRUSH.md"
+
+[[harness]]
+id = "goose"
+label = "Goose（Block / AAIF）"
+kind = "cli"
+skills_dir = "~/.config/goose/skills"
+mcp_kind = "file"
+mcp_target = "~/.config/goose/config.yaml"
+verified = false
+source = "docs"
+note = "MCP 优先（70+ 扩展）；配置是 YAML，插件走 extensions 而不是 mcpServers"
+
+[[harness]]
+id = "aider"
+label = "Aider"
+kind = "cli"
+skills_dir = ""
+mcp_kind = "none"
+verified = false
+source = "docs"
+note = "没有 skills 目录：靠 .aider.conf.yml 的 read: 把 AGENTS.md 读进上下文"
+
+[[harness]]
+id = "openhands"
+label = "OpenHands"
+kind = "cli"
+skills_dir = "~/.openhands/skills"
+mcp_kind = "none"
+verified = false
+source = "docs"
+note = "重平台（Docker 沙箱 / web / ACP）；skills 路径未验证"
+
+[[harness]]
+id = "workbuddy"
+label = "WorkBuddy"
+kind = "cli"
+skills_dir = "~/.workbuddy/skills"
+mcp_kind = "file"
+mcp_target = "~/.workbuddy/mcp.json"
+verified = true
+source = "local"
+
+# ---------------------------------------------------------------- IDE（靠插件调度）
+[[harness]]
+id = "cursor"
+label = "Cursor"
+kind = "ide"
+skills_dir = "~/.cursor/skills"
+mcp_kind = "file"
+mcp_target = "~/.cursor/mcp.json"
+verified = false
+source = "docs"
+note = "也读 .agents/skills 与 AGENTS.md；harness 与 IDE 不可分离，不能派发"
+
+[[harness]]
+id = "copilot"
+label = "GitHub Copilot"
+kind = "ide"
+skills_dir = "~/.copilot/skills"
+mcp_kind = "file"
+mcp_target = "~/.copilot/mcp-config.json"
+verified = true
+source = "local"
+
+[[harness]]
+id = "cline"
+label = "Cline（桌面 App + VS Code 扩展 + CLI）"
+kind = "desktop"
+skills_dir = "~/.cline/skills"
+mcp_kind = "none"
+plugin = "mcp"
+verified = true
+source = "local"
+note = "桌面 App 在 %LOCALAPPDATA%\\Cline\\cline-app.exe（本机在 E: 盘）；~/.cline 下是 AGENTS.md/SOUL.md 等工作区，skills 目录需自建"
+
+[[harness]]
+id = "roo-code"
+label = "Roo Code"
+kind = "ide"
+skills_dir = "~/.roo/skills"
+mcp_kind = "none"
+verified = false
+source = "docs"
+note = "读 .roorules；Boomerang 多 agent 编排"
+
+[[harness]]
+id = "kilo-code"
+label = "Kilo Code（Roo Code 的继任者）"
+kind = "ide"
+skills_dir = "~/.kilocode/skills"
+mcp_kind = "none"
+plugin = "skills"
+verified = false
+source = "docs"
+note = "500+ 模型；Roo Code 2026-05 归档后官方指向它；IDE 扩展 + CLI 双形态"
+
+[[harness]]
+id = "trae"
+label = "Trae"
+kind = "ide"
+skills_dir = "~/.trae/skills"
+mcp_kind = "none"
+verified = true
+source = "local"
+
+[[harness]]
+id = "trae-cn"
+label = "Trae CN"
+kind = "ide"
+skills_dir = "~/.trae-cn/skills"
+mcp_kind = "none"
+verified = true
+source = "local"
+
+[[harness]]
+id = "qoder"
+label = "Qoder IDE"
+kind = "ide"
+skills_dir = "~/.qoder/skills"
+mcp_kind = "none"
+verified = true
+source = "local"
+
+[[harness]]
+id = "kiro"
+label = "Kiro"
+kind = "ide"
+skills_dir = "~/.kiro/skills"
+mcp_kind = "file"
+mcp_target = "~/.kiro/settings/mcp.json"
+verified = true
+source = "local"
+note = "mcp.json 已存在；skills 目录需自建"
+
+[[harness]]
+id = "antigravity"
+label = "Google Antigravity"
+kind = "ide"
+skills_dir = "~/.gemini/config/skills"
+mcp_kind = "none"
+verified = false
+source = "docs"
+note = "读 GEMINI.md 与 .agents/rules/；默认 skills 位在 .agent/skills（可软链到 .agents/skills）"
+
+[[harness]]
+id = "droid"
+label = "Factory Droid"
+kind = "ide"
+skills_dir = "~/.factory/skills"
+mcp_kind = "none"
+verified = false
+source = "docs"
+
+[[harness]]
+id = "zed"
+label = "Zed（Agent Panel / ACP）"
+kind = "ide"
+skills_dir = ""
+mcp_kind = "none"
+verified = false
+source = "docs"
+note = "ACP 宿主：它跑的是 Claude/Codex/Gemini/OpenCode 这些**别的** harness，本身不需要 skill"
+
+[[harness]]
+id = "jules"
+label = "Google Jules"
+kind = "ide"
+skills_dir = ""
+mcp_kind = "none"
+verified = false
+source = "docs"
+note = "无 skills 机制；只有 AGENTS.md + setup 脚本"
+
+[[harness]]
+id = "openfang"
+label = "OpenFang"
+kind = "ide"
+skills_dir = "~/.openfang/workspaces/*/skills"
+mcp_kind = "none"
+verified = true
+source = "local"
+
+[[harness]]
+id = "pencil"
+label = "Pen Agent（Pencil）"
+kind = "desktop"
+skills_dir = "~/.pencil/skills"
+mcp_kind = "none"
+plugin = "mcp"
+verified = true
+source = "local"
+note = "App 叫 Pen（Programs\\Pen\\Pen.exe），配置目录叫 ~/.pencil；里面有 agent-auth / pi-sessions / models.json —— 是 Agent，不是纯设计工具"
+
+[[harness]]
+id = "open-design"
+label = "Open Design（UI 设计 Agent）"
+kind = "desktop"
+skills_dir = ""
+mcp_kind = "none"
+plugin = "mcp"
+verified = true
+source = "local"
+note = "Electron，配置在 %APPDATA%\\Open Design（installation.json / launcher / namespaces）；无 skills 目录，接 MCP"
+
+[[harness]]
+id = "vscode"
+label = "VS Code（Agent 宿主）"
+kind = "desktop"
+skills_dir = ""
+mcp_kind = "file"
+mcp_target = "~/.vscode/mcp.json"
+plugin = "vscode-extension"
+verified = true
+source = "local"
+note = "MCP/skill 覆盖不到它 —— 需要专用扩展：见 plugins/vscode/（命令面板派发 + 状态栏）。Copilot 本体另有 copilot 行"
+
+[[harness]]
+id = "doubao"
+label = "Doubao"
+kind = "ide"
+skills_dir = "~/Doubao/skills"
+mcp_kind = "none"
+verified = false
+source = "docs"
+
+[[harness]]
+id = "doubaowork"
+label = "DoubaoWork"
+kind = "ide"
+skills_dir = "~/DoubaoWork/skills"
+mcp_kind = "none"
+verified = false
+source = "docs"
+
+# ---------------------------------------------------------------- 桌面端
+# 桌面 harness 的「插件」= .mcpb（MCP Bundle），由 tools/build_mcpb.py 生成。
+# 有 .mcpb 就别改 JSON：双击安装，密钥进 OS 钥匙串，客户端自带 Node 运行时。
+# 这里的 skills_dir 多数未验证 —— 桌面端的 skill 支持仍在收敛（Claude Desktop
+# 2026-02 起把 skills/plugins/connectors 收进 Customize），所以留空表示
+# 「只用插件（mcpb / config），不投 skill 目录」。
+
+[[harness]]
+id = "claude-desktop"
+label = "Claude Desktop"
+kind = "desktop"
+skills_dir = ""
+mcp_kind = "file"
+mcp_target = "%APPDATA%/Claude/claude_desktop_config.json"
+plugin = "mcpb"
+verified = false
+source = "docs"
+note = "首选装 dist/agent_bridge-0.2.0.mcpb（Settings→Extensions→Install Extension）；改 JSON 要完全退出再启动"
+
+[[harness]]
+id = "chatgpt-desktop"
+label = "ChatGPT Desktop"
+kind = "desktop"
+skills_dir = ""
+mcp_kind = "none"
+plugin = "connector"
+verified = false
+source = "docs"
+note = "只认远程 MCP connector（https URL）；本地 stdio 服务接不进去，除非先套一层 HTTP 转发"
+
+[[harness]]
+id = "devin-desktop"
+label = "Devin Desktop（原 Windsurf / Codeium）"
+kind = "desktop"
+skills_dir = "~/.codeium/windsurf/skills"
+mcp_kind = "file"
+mcp_target = "~/.codeium/windsurf/mcp_config.json"
+plugin = "mcp"
+verified = false
+source = "docs"
+note = "2026-06 由 Cognition 更名；旧路径可能保留为 ~/.codeium/windsurf"
+
+[[harness]]
+id = "codebuddy-ide"
+label = "CodeBuddy IDE（腾讯）"
+kind = "desktop"
+skills_dir = ""
+mcp_kind = "none"
+plugin = "mcp"
+verified = false
+source = "docs"
+note = "插件、IDE、CLI 三端；CLI 走 agent_bridge 的 codebuddy 路由，IDE 侧只做 MCP"
+
+[[harness]]
+id = "qoder-cli"
+label = "Qoder CLI（本机实测：其实指向 IDE 启动器）"
+kind = "cli"
+skills_dir = ""
+mcp_kind = "none"
+plugin = "mcp"
+verified = true
+source = "local"
+note = "本机 qoder 是 `Programs\\Qoder IDE\\bin\\qoder.CMD`，`--version` 1.32.1，帮助里只有 --locate-shell-integration-path / --prof-startup，**没有 -p/--print**，不能当路由"
+
+[[harness]]
+id = "kiro-cli"
+label = "Kiro CLI"
+kind = "cli"
+skills_dir = ""
+mcp_kind = "none"
+plugin = "mcp"
+verified = false
+source = "docs"
+
+[[harness]]
+id = "cursor-cli"
+label = "Cursor CLI"
+kind = "cli"
+skills_dir = ""
+mcp_kind = "none"
+plugin = "mcp"
+verified = false
+source = "docs"
+note = "`cursor-agent` 提供脚本化执行；与 Cursor IDE 共用账号"
+
+[[harness]]
+id = "copilot-cli"
+label = "GitHub Copilot CLI"
+kind = "cli"
+skills_dir = ""
+mcp_kind = "none"
+plugin = "mcp"
+verified = false
+source = "docs"
+
+[[harness]]
+id = "mistral-vibe"
+label = "Mistral Vibe"
+kind = "cli"
+skills_dir = ""
+mcp_kind = "none"
+plugin = "skills"
+verified = false
+source = "docs"
+
+[[harness]]
+id = "kimi-code"
+label = "Kimi Code（Moonshot）"
+kind = "desktop"
+skills_dir = ""
+mcp_kind = "file"
+mcp_target = "~/.kimi-code/mcp.json"
+plugin = "mcp"
+verified = true
+source = "local"
+note = "桌面 App 在 %LOCALAPPDATA%\\Programs\\Kimi Code\\Kimi Code.exe；~/.kimi-code 下已有 config.toml + mcp.json（修改前会先备份）"
+
+[[harness]]
+id = "zcode"
+label = "ZCode"
+kind = "desktop"
+skills_dir = "~/.zcode/skills"
+mcp_kind = "none"
+plugin = "skills"
+verified = true
+source = "local"
+note = "桌面 App 在 %LOCALAPPDATA%\\Programs\\ZCode\\ZCode.exe；~/.zcode 下自带 agents/ 与 skills/（含现成 skill）"
+
+[[harness]]
+id = "minimax-code"
+label = "MiniMax Code"
+kind = "desktop"
+skills_dir = "~/.minimax-code/skills"
+mcp_kind = "none"
+plugin = "mcp"
+verified = true
+source = "local"
+note = "~/.minimax-code 下只有 releases/（自动更新缓存）；skills 目录需自建"
+
+[[harness]]
+id = "deepseek-harness"
+label = "DeepSeek Harness（桌面 App）"
+kind = "desktop"
+skills_dir = ""
+mcp_kind = "none"
+plugin = "mcp"
+verified = true
+source = "local"
+note = "与 dsh CLI 是同一产品的两个形态；App 已装（%LOCALAPPDATA%\\Programs\\DeepSeek Harness\\），CLI 未进 PATH，故不可派发"
+
+[[harness]]
+id = "grok-build"
+label = "Grok Build"
+kind = "cli"
+skills_dir = ""
+mcp_kind = "none"
+plugin = "mcp"
+verified = false
+source = "docs"
+note = "有 script mode 与 ACP 集成"
+
+[[harness]]
+id = "warp"
+label = "Warp"
+kind = "cli"
+skills_dir = ""
+mcp_kind = "none"
+plugin = "mcp"
+verified = false
+source = "docs"
+
+[[harness]]
+id = "plandex"
+label = "Plandex"
+kind = "cli"
+skills_dir = ""
+mcp_kind = "none"
+plugin = "skills"
+verified = false
+source = "docs"
+note = "plan 分支 / diff 沙箱 / tree-sitter repo map"
+
+[[harness]]
+id = "junie"
+label = "JetBrains Junie"
+kind = "ide"
+skills_dir = ""
+mcp_kind = "none"
+plugin = "mcp"
+verified = false
+source = "docs"
+note = "IntelliJ 系内置 agent；也提供 headless CLI 用于 CI"
+
+[[harness]]
+id = "continue-cli"
+label = "Continue CLI"
+kind = "cli"
+skills_dir = ""
+mcp_kind = "none"
+plugin = "mcp"
+verified = false
+source = "docs"
+
+[[harness]]
+id = "hermes"
+label = "Hermes（Nous Research）"
+kind = "cli"
+skills_dir = ""
+mcp_kind = "none"
+plugin = "skills"
+verified = false
+source = "docs"
+form = "cli"
+note = "自称会自己写 skill；支持 MCP 与 ACP"
+
+
+# ---------------------------------------------------------------- 同产品的其它形态
+# 「没装」这句话必须带形态限定：DeepSeek Harness 有桌面与 Web，OpenCode 有
+# cli / desktop / web。否则用户以为整个产品没装，只是装了另一个形态。
+
+[[harness]]
+id = "opencode-desktop"
+label = "OpenCode Desktop"
+kind = "desktop"
+form = "desktop"
+skills_dir = ""
+mcp_kind = "none"
+plugin = "mcp"
+verified = false
+source = "docs"
+install_hint = "OpenCode 官方提供 desktop app；与本机 cli 共用同一份配置"
+note = "与 opencode cli 是两个形态，不是两个产品"
+
+[[harness]]
+id = "opencode-web"
+label = "OpenCode Web（浏览器客户端）"
+kind = "web"
+form = "web"
+skills_dir = ""
+mcp_kind = "none"
+plugin = "mcp"
+verified = false
+source = "docs"
+url = "https://opencode.ai"
+note = "web 形态无需安装；派发仍走本机 cli，或给它远程 MCP 地址"
+
+[[harness]]
+id = "dsh-web"
+label = "DeepSeek Harness（Web）"
+kind = "web"
+form = "web"
+skills_dir = ""
+mcp_kind = "none"
+plugin = "mcp"
+verified = false
+source = "docs"
+install_hint = "DeepSeek Harness 的 Web 入口；桌面版已装（见 deepseek-harness）"
+note = "web 与 desktop 共用账号，但 skill/MCP 走各自宿主"
+
+[[harness]]
+id = "claude-web"
+label = "Claude（Web）"
+kind = "web"
+form = "web"
+skills_dir = ""
+mcp_kind = "file"
+mcp_target = "%APPDATA%/Claude/claude_desktop_config.json"
+plugin = "connector"
+verified = false
+source = "docs"
+url = "https://claude.ai"
+note = "web 版只认远程 MCP connector，本地 stdio 接不进去"
+
+# ---------------------------------------------------------------- 机器人框架
+# 这类不是"编码 Agent"，而是**宿主**：它自己接消息平台，用插件扩展能力。
+# 插件规范与 skill 无关，必须按它自己的格式写（见 plugins/astrbot/）。
+
+[[harness]]
+id = "astrbot"
+label = "AstrBot（多平台聊天机器人框架）"
+kind = "server"
+form = "server"
+skills_dir = ""
+mcp_kind = "file"
+mcp_target = "E:/data/mcp_server.json"
+plugin = "native"
+verified = true
+source = "local"
+install_hint = "本机数据根在 E:////data（ASTRBOT_ROOT=E:////），主程序不在该目录"
+note = "实测：数据根 E:////data，内含 cmd_config.json / mcp_server.json / plugins/ / data_v4.db。MCP 段在 **mcp_server.json**（不是 cmd_config.json），形状是 mcpServers；插件装到 E:////data////plugins////<name>////（metadata.yaml 四字段必填，主类继承 star.Star 或叫 Main）"

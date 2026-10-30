@@ -1,10 +1,10 @@
 [plugin]
 id = "agent_bridge"
 name = "本机 Agent 桥接"
-description = "把本机的编码 Agent CLI（CodeBuddy / Claude Code / dsh / omp / EvoX / OpenCode / OpenClaw / AtomCode / QwenPaw）桥接成 N.E.K.O 的运行时入口，并注册为对话期 LLM 工具，让猫娘在聊天里就能直接派活给它们。 反方向见 skill/neko-bridge：把 N.E.K.O. 做成可移植 skill 装到这些 Agent 里，让它们能反过来调用 N.E.K.O.。"
-short_description = "Bridge local coding-agent CLIs (CodeBuddy / Claude Code / dsh / omp / EvoX / OpenCode / OpenClaw / AtomCode / QwenPaw) into N.E.K.O as entries and LLM tools."
-keywords = ["agent", "代理", "编码", "代码", "codebuddy", "claude", "dsh", "omp", "evox", "opencode", "openclaw", "atomcode", "qwenpaw", "CLI", "命令行", "派发", "跑一下", "写个脚本", "改代码"]
-version = "0.1.0"
+description = "把本机的编码 Agent CLI 桥接成 N.E.K.O 的运行时入口，并注册为对话期 LLM 工具，让猫娘在聊天里就能直接派活给它们。内置 9 个（CodeBuddy / Claude Code / dsh / omp / EvoX / OpenCode / OpenClaw / AtomCode / QwenPaw），其余通过 providers/<id>/provider.toml 动态登记（本仓库自带 Gemini CLI / Command Code / pi），新增只需放一个目录、不改代码。 反方向见 skill/neko-bridge：把 N.E.K.O. 做成可移植 skill 装到这些 Agent 里，让它们能反过来调用 N.E.K.O.。"
+short_description = "Bridge local coding-agent CLIs into N.E.K.O as entries and LLM tools; built-in 9 agents plus data-driven providers/ for the rest."
+keywords = ["agent", "代理", "编码", "代码", "codebuddy", "claude", "dsh", "omp", "evox", "opencode", "openclaw", "atomcode", "qwenpaw", "gemini", "command-code", "cmdc", "pi", "CLI", "命令行", "派发", "跑一下", "写个脚本", "改代码", "provider", "路由"]
+version = "0.2.0"
 entry = "plugin.plugins.agent_bridge:AgentBridgePlugin"
 
 [plugin.author]

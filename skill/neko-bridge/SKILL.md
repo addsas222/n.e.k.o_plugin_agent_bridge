@@ -2,13 +2,14 @@
 name: neko-bridge
 description: |
   Dispatch non-interactive tasks to the local coding-agent CLIs (CodeBuddy, Claude Code, dsh, omp,
-  EvoX, OpenCode, OpenClaw, AtomCode, QwenPaw) and, when N.E.K.O. is running, discover and invoke
-  its plugins/entries and read its recent messages. Use when the user wants this agent to hand a
-  task to another local agent CLI, or to drive/query a running N.E.K.O. (猫娘). Everything is
-  stdlib-only Python: no installs, no network beyond 127.0.0.1.
+  EvoX, OpenCode, OpenClaw, AtomCode, QwenPaw, plus anything registered under providers/: Gemini CLI,
+  Command Code, pi, …) and, when N.E.K.O. is running, discover and invoke its plugins/entries and read
+  its recent messages. Use when the user wants this agent to hand a task to another local agent CLI,
+  or to drive/query a running N.E.K.O. (猫娘). Everything is stdlib-only Python: no installs, no network
+  beyond 127.0.0.1.
 metadata:
   author: "local"
-  version: "0.2.0"
+  version: "0.3.0"
   requires:
     bins: ["python"]
   cliHelps: ["python bin/neko.py agents --json", "python bin/neko.py dispatch --help", "python bin/neko.py doctor --json"]
@@ -20,13 +21,13 @@ metadata:
 
 | 族 | 动词 | 依赖 | 用途 |
 |---|---|---|---|
-| **主干：本机 Agent** | `agents` / `dispatch` | 只依赖本机装了那些 CLI | 把任务派给 CodeBuddy / Claude Code / dsh / omp / EvoX / OpenCode / OpenClaw / AtomCode / QwenPaw |
+| **主干：本机 Agent** | `agents` / `dispatch` | 只依赖本机装了那些 CLI | 把任务派给已登记的编码 Agent CLI（内置 9 个 + `providers/` 里登记的） |
 | 附加：N.E.K.O. | `doctor` / `plugins` / `entries` / `run` / `messages` | N.E.K.O. 在跑（127.0.0.1） | 发现并调用它的插件入口、读它最近的消息 |
 
 ## 主干一：看看本机有哪些 Agent
 
 ```bash
-python bin/neko.py agents                 # 9 个 Agent 的安装状态 + 版本（版本有 24h 缓存）
+python bin/neko.py agents                 # 全部 Agent 的安装状态 + 版本（版本有 24h 缓存）
 python bin/neko.py agents --no-version    # 只探测安装位置（快）
 python bin/neko.py agents --json
 ```
@@ -43,12 +44,40 @@ python bin/neko.py dispatch dsh "写个脚本：统计目录下每种扩展名�
 python bin/neko.py dispatch evox "..." --dry-run      # 只回显将执行的命令行（不跑）
 ```
 
-- 参数拼装按各家形态（`-p` 开关 / 位置参数 / 固定子命令），与 agent_bridge 的 `AGENT_SPECS` 同源；
+- 参数拼装按各家形态（`-p` 开关 / `--print` 布尔开关 + 位置参数 / 位置参数 / 固定子命令），
+  规格来自 `providers/<id>/provider.toml`（新增 Agent 只改清单，不改本文件）；
 - 结果给出 `exit_code / duration_ms / stdout / stderr`，`--json` 可选，`--json-output` 会要求 Agent 输出 JSON 并尝试解析；
-- 别名可用：`cbc`=codebuddy、`pi`/`oh-my-pi`=omp、`oc`=opencode、`claw`=openclaw、`atom`=atomcode、`qwen`=qwenpaw；
+- 别名可用：`cbc`=codebuddy、`oh-my-pi`/`ompi`=omp、`oc`=opencode、`claw`=openclaw、
+  `atom`=atomcode、`qwen`=qwenpaw、`gcli`=gemini、`cmdc`/`commandcode`=command-code。
+  **`pi` 不是 omp 的别名**（曾经是，已修正）：`pi` 属于另一个产品
+  `@earendil-works/pi-coding-agent`，`omp` 属于 `@oh-my-pi/pi-coding-agent`；
 - 子进程会清掉 `PYTHONHOME/PYTHONPATH`（N.E.K.O. 的嵌入式 Python 会让子 Agent 起不来）；
 - `--timeout` 超时会**连子孙进程一起清理**（`.cmd` 包装的 Agent 真身是孙进程；只杀直接子进程
   会让它继续跑、继续花额度）—— 超时结果里 `timed_out=true`。
+- 未登录的 CLI 会被认出来：结果里出现 `needs_login: true` + `login_hint`，此时任务**没有执行**，
+  换一个 Agent 重试，别把它当成任务结果。
+
+## 主干三：新增一个 Agent（改清单，不改代码）
+
+在 `providers/<id>/provider.toml` 里声明即可，插件与 skill 都从这里读：
+
+```toml
+schema = 1
+[provider]
+id = "gemini"                  # 必须 == 目录名
+label = "Gemini CLI（Google）"
+binary = "gemini"
+mode = "flag"                  # flag(-p <值>) / switch(-p 布尔 + 位置参数) / positional
+prompt_flag = "-p"
+model_flag = "-m"
+json_args = ["-o", "json"]
+aliases = ["gcli"]
+auth_patterns = ["please set an auth method"]   # 该 Agent 的未登录措辞
+login_hint = "设 GEMINI_API_KEY"
+```
+
+字段全集、命名约定与冲突规则见仓库 `providers/README.md`。
+本 skill 自带 `providers/` 副本，由 `python sync_providers.py --check` 校验是否漂移。
 
 ## 附加：N.E.K.O. 侧（需要它在跑）
 

@@ -168,7 +168,11 @@ def _env_int(name: str) -> int | None:
 #
 # 这一半**不依赖 N.E.K.O.**：只要有本机装了编码 Agent CLI，就能在任意 Agent 环境里
 # 「发现 + 派活」，所以它是 skill 的主干；N.E.K.O. 那些动词是附加族。
-# 登记表与 agent_bridge 的 AGENT_SPECS 同源（改动请两边同步）。
+#
+# 登记表分两段：下面这个字面量是**内置 9 个**（与 agent_bridge/bridge/registry.py 同源），
+# 之后 `_load_providers()` 会把 ``providers/<id>/provider.toml`` 增量合并进来 ——
+# 新增 Agent 只改清单，不改本文件。内置那张表仍然手抄，是为了让这个 skill 在**没有
+# providers 目录**的机器上也能独立工作（拷一个 neko.py 就能用）。
 # --------------------------------------------------------------------------- #
 
 #: ``id -> (label, binary, mode, fixed_args, prompt_flag, model_flag, json_args, notes)``
@@ -194,9 +198,116 @@ AGENT_SPECS: dict[str, tuple[str, str, str, tuple[str, ...], str | None, str | N
 }
 
 AGENT_ALIASES: dict[str, str] = {
-    "cbc": "codebuddy", "codebuddy-code": "codebuddy", "oh-my-pi": "omp", "pi": "omp",
+    "cbc": "codebuddy", "codebuddy-code": "codebuddy", "oh-my-pi": "omp", "ompi": "omp",
     "oc": "opencode", "claw": "openclaw", "atom": "atomcode", "qwen": "qwenpaw",
 }
+#: 注：这里曾经有 ``"pi": "omp"``，已移除。`omp` 来自 @oh-my-pi/pi-coding-agent（v18.x），
+#: 而 PATH 上的 `pi` 来自 @earendil-works/pi-coding-agent（v1.x）—— 两个产品共用一个
+#: 可执行名。旧别名等于「按 pi 跑 omp」，真正的 pi 永远调不到。现在 `pi` 是 providers/pi
+#: 独立登记的路由，omp 用 `omp` / `oh-my-pi` / `ompi`。
+
+#: 逐 Agent 的鉴权失败特征与处置提示，来自 ``providers/<id>/provider.toml``。
+#: 键是 Agent id，值是 ``(auth_patterns, login_hint)``。没登记的 Agent 不参与本字典。
+PROVIDER_AUTH: dict[str, tuple[tuple[str, ...], str]] = {}
+
+
+def _provider_roots() -> list[Path]:
+    """provider 目录的搜索顺序：环境变量 → skill 自带副本 → 仓库根。
+
+    三处是有意的：skill 被 ``install.py`` 拷进某个 Agent 的 skills 目录后，
+    ``providers/`` 是**随 skill 一起拷过去的副本**；在源码树里跑测试时则要能
+    找到仓库根的 ``providers/``（唯一手改的那一份）。
+    """
+    roots: list[Path] = []
+    env_value = (os.environ.get("NEKO_BRIDGE_PROVIDERS") or "").strip()
+    if env_value:
+        roots.append(Path(env_value))
+    here = Path(__file__).resolve()
+    roots.append(here.parent.parent / "providers")          # skill/neko-bridge/providers
+    roots.append(here.parents[3] / "providers")             # <repo>/providers
+    return roots
+
+
+def _load_providers() -> list[str]:
+    """把 ``providers/*/provider.toml`` 合并进 AGENT_SPECS / AGENT_ALIASES。
+
+    返回告警。**不覆盖**已有 id：内置那 9 个仍然以本文件里的字面量为准，
+    provider 只负责新增。这样即使把一份坏清单放进目录，也不会悄悄改掉
+    ``claude`` 的调用方式。
+    """
+    warnings: list[str] = []
+    root = next((path for path in _provider_roots() if path.is_dir()), None)
+    if root is None:
+        return warnings
+
+    try:
+        import tomllib as _toml
+    except ModuleNotFoundError:  # Python 3.9 / 3.10
+        try:
+            import tomli as _toml  # type: ignore[no-redef]
+        except ModuleNotFoundError:
+            return ["provider 目录被跳过：需要 Python 3.11+ 或安装 tomli"]
+
+    for directory in sorted(root.iterdir()):
+        if not directory.is_dir() or directory.name.startswith((".", "_")):
+            continue
+        manifest_path = directory / "provider.toml"
+        if not manifest_path.is_file():
+            continue
+        try:
+            with open(manifest_path, "rb") as handle:
+                raw = _toml.load(handle)
+            section = raw["provider"]
+            pid = str(section["id"]).strip()
+            if pid != directory.name:
+                warnings.append(f"{manifest_path} 的 id={pid!r} 与目录名不一致，已跳过")
+                continue
+            if pid in AGENT_SPECS:
+                warnings.append(f"provider {pid!r} 与已登记 Agent 同名，已跳过（内置优先）")
+                continue
+            mode = str(section.get("mode") or "").strip()
+            if mode not in ("flag", "switch", "positional"):
+                warnings.append(f"{manifest_path} 的 mode={mode!r} 非法，已跳过")
+                continue
+            AGENT_SPECS[pid] = (
+                str(section.get("label") or pid),
+                str(section.get("binary") or pid),
+                mode,
+                tuple(str(item) for item in section.get("fixed_args") or ()),
+                section.get("prompt_flag"),
+                section.get("model_flag"),
+                tuple(str(item) for item in section.get("json_args") or ()),
+                str(section.get("notes") or ""),
+            )
+            PROVIDER_AUTH[pid] = (
+                tuple(str(item) for item in section.get("auth_patterns") or ()),
+                str(section.get("login_hint") or ""),
+            )
+            for alias in section.get("aliases") or ():
+                key = str(alias).strip().lower()
+                if not key or key == pid:
+                    continue
+                if key in AGENT_SPECS or (key in AGENT_ALIASES and AGENT_ALIASES[key] != pid):
+                    warnings.append(f"provider {pid!r} 的别名 {key!r} 已被占用，已忽略")
+                    continue
+                AGENT_ALIASES[key] = pid
+        except Exception as exc:  # noqa: BLE001 — 一份坏清单不该让整个 skill 起不来
+            warnings.append(f"{manifest_path} 解析失败，已跳过：{type(exc).__name__}: {exc}")
+    return warnings
+
+
+PROVIDER_WARNINGS: list[str] = _load_providers()
+
+#: 全局鉴权特征兜底（措辞按最初 9 个 CLI 写的，新 Agent 靠 PROVIDER_AUTH 补）。
+_AUTH_GENERIC: tuple[str, ...] = (
+    r"authentication\s+(?:required|failed)",
+    r"unauthenticated",
+    r"not\s+(?:logged\s?in|authenticated|signed\s?in)",
+    r"run\s+[`\"]?[\w-]+\s+login",
+    r"invalid\s+api\s*key",
+    r"credentials?\s+(?:expired|invalid|not\s+found|missing)",
+    r"请(?:先)?登录|尚未登录|未登录|需要登录",
+)
 
 #: 子进程里必须清掉的环境变量：N.E.K.O. 用嵌入式 Python，PYTHONHOME/PYTHONPATH 会指向
 #: 宿主自己的 bin，导致 Python 实现的 Agent（如 qwenpaw）直接起不来。
@@ -313,6 +424,11 @@ def build_agent_argv(
     if mode == "flag":
         if not prompt_flag:
             raise NekoError(f"agent {spec_id} 的 mode=flag 但没定义 prompt_flag")
+        argv += [prompt_flag, task]
+    elif mode == "switch":
+        # `-p/--print` 这类是布尔开关，正文按位置参数跟在后面（pi、command-code）。
+        if not prompt_flag:
+            raise NekoError(f"agent {spec_id} 的 mode=switch 但没定义 prompt_flag")
         argv += [prompt_flag, task]
     elif mode == "positional":
         argv.append(task)
@@ -501,6 +617,46 @@ def agent_report(spec_id: str, *, want_version: bool, fresh: bool = False) -> di
     return report
 
 
+def detect_needs_login(spec_id: str, stdout: str, stderr: str) -> str:
+    """判断这次派发是不是「CLI 没登录、任务根本没跑」，返回提示首行（否则空串）。
+
+    为什么必须判：这些 CLI 未登录时的**退出码各不相同** —— 老的那些给 0，
+    实测 gemini 给 **41**、command-code 给 **3**。只靠退出码既会漏（0 的情况被当成功），
+    又说不清（41/3 只会被报成普通 FAILED，不会提示「这台没登录，换一个」）。
+
+    三条判据缺一不可：
+    1. stderr 足够短（真跑完任务时不会只有一行）；
+    2. 开头命中全局特征或该 Agent 自己声明的 ``auth_patterns``；
+    3. stdout 没有实质内容（只有警告/空行不算）。
+
+    与上游 ``agent_bridge/bridge/runner.py::_detect_auth_failure`` 同一套逻辑，
+    区别是这里的特征表额外收 provider 清单里的 ``auth_patterns``。
+    """
+    import re as _re
+
+    text = (stderr or "").strip()
+    if not text or len(text) > 800:
+        return ""
+    head = text[:400]
+    patterns = list(_AUTH_GENERIC)
+    extra, _hint = PROVIDER_AUTH.get(spec_id, ((), ""))
+    patterns += [item for item in extra if item]
+
+    for raw in patterns:
+        try:
+            if _re.search(raw, head, _re.IGNORECASE):
+                break
+        except _re.error:
+            continue
+    else:
+        return ""
+
+    substantive = [line for line in (stdout or "").splitlines() if len(line.strip()) >= 8]
+    if substantive:
+        return ""
+    return next((line.strip() for line in text.splitlines() if line.strip()), head[:120])
+
+
 def dispatch_agent(
     agent: str, task: str, *, model: str = "", cwd: str = "", timeout: float = 600.0,
     json_output: bool = False, extra: list[str] | None = None, dry_run: bool = False,
@@ -514,6 +670,19 @@ def dispatch_agent(
         return {"dry_run": True, "agent": spec_id, "argv": argv, "cwd": cwd or os.getcwd()}
     result = run_subprocess(argv, cwd=cwd or None, timeout=timeout)
     result.update({"agent": spec_id, "label": AGENT_SPECS[spec_id][0], "source": source, "task": task})
+    # 未登录的 CLI 表现不一致：有的退出码 0（只打一行提示），有的给非 0
+    # （实测 gemini=41、command-code=3）。所以**不能**用退出码当门槛，
+    # 只看「没超时」—— 否则「没登录」会被报成普通 FAILED，既不会提示换 Agent，
+    # 也不会被 agents 列表标成 needs_login。
+    if not result.get("timed_out"):
+        auth_line = detect_needs_login(spec_id, result.get("stdout") or "", result.get("stderr") or "")
+        if auth_line:
+            result["needs_login"] = True
+            result["ok"] = False
+            result["note"] = "该 CLI 未登录，任务没有执行；换一个 ready 的 Agent 重试。"
+            hint = PROVIDER_AUTH.get(spec_id, ((), ""))[1]
+            if hint:
+                result["login_hint"] = hint
     # 不管有没有要求 --json-output，只要 stdout 本身就是 JSON 就顺手解析出来
     # （qwenpaw 的 headless 输出天然是 JSON：{"status","response","elapsed_seconds"}）。
     text = (result.get("stdout") or "").strip()

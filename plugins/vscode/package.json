@@ -1,0 +1,97 @@
+{
+  "name": "agent-bridge-vscode",
+  "displayName": "Agent Bridge（本机 Agent 派发）",
+  "description": "在一个面板里看清 13 个本机编码 Agent 谁可用、并把任务派给它们。装完按 F1 输入「Agent Bridge」即可用。",
+  "version": "0.3.0",
+  "publisher": "local",
+  "engines": { "vscode": "^1.85.0" },
+  "categories": ["Other", "AI"],
+  "activationEvents": [
+    "onStartupFinished",
+    "onCommand:agentBridge.dispatch",
+    "onCommand:agentBridge.status",
+    "onCommand:agentBridge.pickAgent",
+    "onCommand:agentBridge.doctor",
+    "onCommand:agentBridge.startServer"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "commands": [
+      { "command": "agentBridge.doctor", "title": "Agent Bridge: ① 诊断（用不了先点这个）" },
+      { "command": "agentBridge.dispatch", "title": "Agent Bridge: ② 派发任务" },
+      { "command": "agentBridge.status", "title": "Agent Bridge: ③ 看全部 Agent 状态" },
+      { "command": "agentBridge.startServer", "title": "Agent Bridge: 启动本地控制台" },
+      { "command": "agentBridge.pickAgent", "title": "Agent Bridge: 设默认 Agent" }
+    ],
+    "keybindings": [
+      { "command": "agentBridge.dispatch", "key": "ctrl+alt+a", "mac": "cmd+alt+a" }
+    ],
+    "languageModelTools": [
+      {
+        "name": "agent-bridge_vscode_dispatch",
+        "tags": ["agent", "agent-bridge"],
+        "toolReferenceName": "bridgeDispatch",
+        "displayName": "派发任务给本机 Agent",
+        "modelDescription": "把一条非交互式任务派给本机的编码 Agent CLI（如 codebuddy / gemini / opencode / command-code），返回 stdout 与退出码。任务必须自包含；会真执行、可能改文件。",
+        "userDescription": "派发任务给本机某个编码 Agent。",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(send)",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "agent": { "type": "string", "description": "Agent 标识；留空则用默认或自动挑第一个就绪的" },
+            "task": { "type": "string", "description": "要执行的任务描述，必须自包含" },
+            "cwd": { "type": "string", "description": "可选：工作目录绝对路径" },
+            "timeoutSeconds": { "type": "number", "description": "可选：超时秒数" }
+          },
+          "required": ["task"]
+        }
+      },
+      {
+        "name": "agent-bridge_vscode_agents",
+        "tags": ["agent", "agent-bridge"],
+        "toolReferenceName": "bridgeAgents",
+        "displayName": "列出可用的本机 Agent",
+        "modelDescription": "列出本机登记的编码 Agent 及就绪状态（ready / needs_login / disabled / missing）。派发前先调它。",
+        "userDescription": "查看本机哪些编码 Agent 可用。",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(list-unordered)",
+        "inputSchema": { "type": "object", "properties": {} }
+      }
+    ],
+    "mcpServerDefinitionProviders": [
+      { "id": "agentBridgeProvider", "label": "Agent Bridge（本机 Agent 路由）" }
+    ],
+    "configuration": {
+      "title": "Agent Bridge",
+      "properties": {
+        "agentBridge.baseUrl": {
+          "type": "string",
+          "default": "http://127.0.0.1:8787",
+          "description": "本地控制台地址。默认是 python webui/server.py 起的那个。"
+        },
+        "agentBridge.repoRoot": {
+          "type": "string",
+          "default": "",
+          "description": "agent_bridge 仓库路径（含 skill/neko-bridge/bin/neko.py）。留空会自动向上查找。"
+        },
+        "agentBridge.defaultAgent": {
+          "type": "string",
+          "default": "",
+          "description": "默认派给谁（留空则每次让你选）"
+        },
+        "agentBridge.timeoutSeconds": {
+          "type": "number",
+          "default": 300,
+          "description": "单次派发超时（秒）"
+        },
+        "agentBridge.registerMcp": {
+          "type": "boolean",
+          "default": true,
+          "description": "是否把 MCP 服务端也注册给 VS Code（关掉只留手动派发）"
+        }
+      }
+    }
+  },
+  "license": "MIT"
+}

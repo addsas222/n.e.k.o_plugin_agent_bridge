@@ -75,7 +75,7 @@ class AgentBridgePlugin(NekoPluginBase):
             'plugin': {
                 'id': 'agent_bridge',
                 'name': 'Agent 桥接',
-                'version': '0.1.0',
+                'version': '0.2.0',
                 'description': '把本机编码 Agent CLI 桥接成 N.E.K.O 运行时入口(生成面板:入口清单)。',
             },
             'entries': self._entry_rows(),
@@ -483,8 +483,7 @@ class AgentBridgePlugin(NekoPluginBase):
     @llm_tool(
         name="agent_list",
         description=(
-            "列出本机可用的编码 Agent CLI（CodeBuddy / Claude Code / dsh / omp / EvoX / "
-            "OpenCode / OpenClaw / AtomCode / QwenPaw）及其就绪状态。"
+            f"列出本机可用的编码 Agent CLI（{_AGENT_HINT}）及其就绪状态。"
             "当用户问「你本机有哪些编码 Agent 能用」时调用。"
         ),
         parameters={"type": "object", "properties": {}, "required": []},

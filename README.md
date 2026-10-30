@@ -1,9 +1,14 @@
 # agent_bridge
 
-N.E.K.O 本机 Agent 桥接插件。把本机的编码 Agent CLI
-（CodeBuddy / Claude Code / dsh / omp / EvoX / OpenCode / OpenClaw / AtomCode / QwenPaw）
-桥接成 N.E.K.O 的**运行时入口**，并注册为**对话期 LLM 工具**，
-让猫娘在聊天里就能直接把活派给它们。
+N.E.K.O 本机 Agent 桥接插件。把本机的编码 Agent CLI 桥接成 N.E.K.O 的**运行时入口**，
+并注册为**对话期 LLM 工具**，让猫娘在聊天里就能直接把活派给它们。
+
+内置 9 个：CodeBuddy / Claude Code / dsh / omp / EvoX / OpenCode / OpenClaw / AtomCode /
+QwenPaw。**其余通过 `providers/<id>/provider.toml` 动态登记**（本仓库自带 Gemini CLI /
+Command Code / pi），新增一个 Agent = 放一个目录，不改任何 Python。
+
+- 路由机制与扩展方式：[`docs/agent-routing.md`](docs/agent-routing.md)
+- 清单字段与命名约定：[`providers/README.md`](providers/README.md)
 
 反方向见 [`skill/neko-bridge`](skill/neko-bridge/)：把 N.E.K.O. 做成可移植 Skill
 装到那些 Agent 里，让它们反过来调用 N.E.K.O.。
@@ -12,7 +17,7 @@ N.E.K.O 本机 Agent 桥接插件。把本机的编码 Agent CLI
 
 | 入口 | 类型 | 说明 |
 |------|------|------|
-| `agents_list` | 运行时入口 | 列出 9 个登记 Agent 的解析结果与就绪状态；`probe_versions=true` 时并发探测版本 |
+| `agents_list` | 运行时入口 | 列出全部登记 Agent（内置 + providers）的解析结果与就绪状态；`probe_versions=true` 时并发探测版本 |
 | `agent_run` | 运行时入口 | 把一条任务派给指定 Agent，返回输出；支持 `cwd` / `timeout_seconds` / `model` |
 | `agent_run_parallel` | 运行时入口 | 按 JSON 数组并行派发多条任务，受 `allow_parallel` / `max_parallel` 约束 |
 | `agent_doctor` | 运行时入口 | 诊断桥接链路：平台、解释器、配置来源、每个 Agent 的解析与版本 |
@@ -76,12 +81,28 @@ python -m pytest tests -q
 
 ```
 bridge/registry.py   Agent 规格表 + .cmd 垫片解析 + argv 构造（命令注入防线）
+bridge/providers.py  providers/<id>/provider.toml 的发现、校验与合并
 bridge/runner.py     派发执行 + 鉴权失败识别 + 超时与输出截断
 bridge/config.py     配置读取与逐 Agent 覆盖
 bridge/tools.py      说明性模块（实际入口都在 __init__.py）
+providers/<id>/      每条动态路由：provider.toml + SKILL.md + README.md
+docs/agent-routing.md 路由机制、已知问题与扩展步骤
 ui/panel.tsx         Hosted TSX 面板
-skill/neko-bridge/   反向 Skill：把 N.E.K.O. 装进别的 Agent
+skill/neko-bridge/   反向 Skill：把 N.E.K.O. 装进别的 Agent（自带 providers 副本）
 ```
+
+## 新增一个 Agent
+
+```bash
+mkdir providers/myagent
+$EDITOR providers/myagent/provider.toml     # schema/id/binary/mode/prompt_flag/auth_patterns
+python -m pytest tests/test_providers.py -q
+python skill/neko-bridge/sync_providers.py --apply
+python skill/neko-bridge/bin/neko.py dispatch myagent "只回一个字：好"
+```
+
+字段说明见 [`providers/README.md`](providers/README.md)，完整步骤见
+[`docs/agent-routing.md`](docs/agent-routing.md) §8。
 
 ## 许可
 
