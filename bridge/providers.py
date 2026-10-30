@@ -43,7 +43,7 @@ import logging
 import os
 import re
 from dataclasses import dataclass
-from typing import Any, Iterable
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -340,8 +340,3 @@ def provider_roots(explicit: str | None = None) -> list[str]:
     plugin_dir = os.path.dirname(package_dir)
     roots.append(os.path.join(plugin_dir, "providers"))
     return [root for root in roots if root]
-
-
-def warn_all(warnings: Iterable[str]) -> None:
-    for message in warnings:
-        logger.warning(message)

@@ -24,6 +24,7 @@ import sys
 import threading
 import time
 from dataclasses import dataclass, field
+from functools import lru_cache
 from typing import Any, Iterable
 
 from .config import BridgeConfig, normalize_path
@@ -86,7 +87,8 @@ _AUTH_PATTERNS = (
 """「这台 CLI 还没登录」的常见措辞（中英文都收）。"""
 
 
-def _compile_extra_patterns(extra_patterns: Iterable[str]) -> tuple[re.Pattern[str], ...]:
+@lru_cache(maxsize=64)
+def _compile_extra_patterns(extra_patterns: tuple[str, ...]) -> tuple[re.Pattern[str], ...]:
     """把清单里声明的额外鉴权特征编译成正则，坏正则只丢这一条。
 
     清单是**外部数据**（用户可以手改），一条写错的正则不该让每次派发都抛
@@ -159,9 +161,6 @@ def _detect_auth_failure(
     2. **要求 stdout 里没有实质内容** —— stdout 全是噪声行（警告/空行）时仍判，
        一旦出现非噪声的正文就不再判，这样「让人写登录页」也不会被误伤。
     """
-    text = (stderr or "").strip()
-    if not text or len(text) > _AUTH_MAX_CHARS:
-        return ""
     patterns = _AUTH_PATTERNS + _compile_extra_patterns(extra_patterns)
     return _match_head(stdout, stderr, patterns)
 
@@ -233,28 +232,6 @@ class AgentResult:
     def output_text(self) -> str:
         """优先返回 stdout；为空时退回 stderr（很多 CLI 把结果写 stderr）。"""
         return self.stdout.strip() or self.stderr.strip()
-
-    def to_dict(self) -> dict[str, object]:
-        payload: dict[str, object] = {
-            "agent": self.agent,
-            "label": self.label,
-            "exit_code": self.exit_code,
-            "ok": self.ok,
-            "duration_ms": self.duration_ms,
-            "timed_out": self.timed_out,
-            "output_truncated": self.output_truncated,
-            "command": self.command_preview,
-        }
-        if self.needs_login:
-            payload["needs_login"] = True
-        if self.stdout:
-            payload["stdout"] = self.stdout
-        if self.stderr:
-            payload["stderr"] = self.stderr
-        if self.error:
-            payload["error"] = self.error
-        payload.update(self.extra)
-        return payload
 
 
 class _PipeReader(threading.Thread):

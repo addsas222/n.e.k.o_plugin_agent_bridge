@@ -331,8 +331,7 @@
 <script>
 "use strict";
 const $ = (id) => document.getElementById(id);
-const state = { view:"routes", agents:[], harness:[], sel:null, filter:"", versions:{}, running:false, install:{}, updated:new Set(), probing:new Set(), lastRun:{}, follow:true };
-const SEEN_KEY = "ab-versions";
+const state = { view:"routes", agents:[], harness:[], sel:null, filter:"", versions:{}, running:false, install:{}, probing:new Set(), lastRun:{}, follow:true };
 
 const STATUS = {
   ok:    {cls:"ok",   text:"可派发"},
@@ -467,7 +466,7 @@ function render(){
         ? `<span class="st-${last.ok ? "ok" : (last.needs_login ? "warn" : "bad")}">${last.ok ? "OK" : (last.needs_login ? "需登录" : "失败")}</span> ${esc(last.time)} · ${last.seconds}s`
         : `<span style="color:var(--idle)">—</span>`;
       const verInner = ver
-        ? (state.updated.has(a.id) ? "↑ " : "") + esc(ver.slice(0,16))
+        ? esc(ver.slice(0,16))
         : a.exists ? `<button class="mini" data-probe="${esc(a.id)}">↻ 探测</button>`
         : a.install_cmd ? `<button class="mini" data-install="${esc(a.id)}" data-kind="route">安装</button>`
         : `<button class="mini" data-locate="${esc(a.id)}" data-kind="route">定位</button>`;
@@ -601,9 +600,9 @@ async function probeAll(){
       const id = queue.shift();
       state.versions[id] = "…"; tick();
       try{
-        const d = await api(`/api/version?agent=${encodeURIComponent(id)}`);
+        const d = await api(`/api/version?agent=${encodeURIComponent(id)}&timeout=6&refresh=1`);
         state.versions[id] = d.version || "—";
-      }catch{ state.versions[id] = "err"; }
+      }catch{ delete state.versions[id]; }   // 失败还回按钮，不留 "err"
       done++; tick();
     }
   };
@@ -667,44 +666,6 @@ async function doLocate(id, kind){
   if (kind === "route") probeVersion(id);
 }
 
-/* ---------------- 自动探测版本 ---------------- */
-async function autoProbe(){
-  const todo = state.agents.filter(a => a.exists && !state.versions[a.id]).map(a => a.id);
-  if (!todo.length) return;
-  let prev = {};
-  try{ prev = JSON.parse(localStorage.getItem(SEEN_KEY) || "{}"); }catch{ prev = {}; }
-  const queue = [...todo];
-  const total = todo.length;
-  let done = 0;
-  $("probe-all").disabled = true;
-  const worker = async () => {
-    while (queue.length){
-      const id = queue.shift();
-      state.versions[id] = "探测中";
-      render();
-      try{
-        const d = await api(`/api/version?agent=${encodeURIComponent(id)}&timeout=6`);
-        state.versions[id] = d.version || "—";
-        if (prev[id] && d.version && prev[id] !== d.version) state.updated.add(id);
-        if (d.version) prev[id] = d.version;
-      }catch{
-        delete state.versions[id];
-      }
-      done += 1;
-      $("probe-progress").textContent = `自动探测 ${done}/${total}`;
-      render();
-    }
-  };
-  await Promise.all([worker(), worker()]);
-  $("probe-all").disabled = false;
-  $("probe-progress").textContent = "";
-  try{ localStorage.setItem(SEEN_KEY, JSON.stringify(prev)); }catch{}
-  if (state.updated.size){
-    toast(`${state.updated.size} 个 Agent 版本有变化（行内 ↑）`);
-    render();
-  }
-}
-
 /* ---------------- 前后端一致性 ---------------- */
 async function checkHealth(){
   try{
@@ -716,11 +677,11 @@ async function checkHealth(){
     if (missing.length){
       $("warn-detail").textContent = `缺接口：${missing.join(" / ")}（API ${state.apiBuild}）`;
       $("warn").classList.remove("hidden");
-      toast("后端是旧版本：请重启 webui/server.py");
+      toast("后端是旧版本：请重启控制台");
       return false;
     }
     return true;
-  }catch(e){
+  }catch{
     $("build").textContent = "UI r5 · API 离线";
     return false;
   }
@@ -769,6 +730,8 @@ async function loadAudit(){
         task: r.task || "",
       };
     }
+    // 暂停跟随时不重建 DOM：否则用户正在看历史，列表被换掉、滚动位置也丢
+    if (!state.follow && $("audit").childElementCount > 0) { refreshLastCells(); return; }
     $("audit").innerHTML = rows.map(r=>{
       const ok = r.exit_code === 0 && !r.needs_login && !r.timed_out;
       const cls = r.needs_login ? "warn" : (ok ? "ok" : "bad");

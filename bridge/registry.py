@@ -345,16 +345,6 @@ class ResolvedCommand:
         parts = [self.exe, *self.argv_prefix]
         return " ".join(parts)
 
-    def to_dict(self) -> dict[str, object]:
-        return {
-            "exe": self.exe,
-            "argv_prefix": list(self.argv_prefix),
-            "source": self.source,
-            "exists": self.exists,
-            "detail": self.detail,
-        }
-
-
 def _shim_self_paths(path: str) -> dict[str, str]:
     """把参数修饰符 `%~d0` / `%~p0` / `%~dp0` 等解析成脚本自身的路径片段。
 
@@ -683,7 +673,6 @@ def list_specs() -> list[AgentSpec]:
 # 所以这里在模块末尾就把 providers/ 合并进 AGENT_SPECS。
 
 _PROVIDER_SOURCE: str = ""
-_PROVIDER_WARNINGS: list[str] = []
 
 
 def _merge_providers() -> None:
@@ -700,20 +689,15 @@ def _merge_providers() -> None:
         if not os.path.isdir(root):
             continue
         _PROVIDER_SOURCE = root
-        _PROVIDER_WARNINGS.extend(
-            load_into(AGENT_SPECS, ALIASES, root=root, spec_factory=AgentSpec)
-        )
+        # 清单有问题就直接记 warning：以前收进列表却没人展示，等于静默吞掉
+        for message in load_into(AGENT_SPECS, ALIASES, root=root, spec_factory=AgentSpec):
+            _log_warning(message)
         break
 
 
 def provider_source() -> str:
     """这次启动实际读了哪个 providers 目录（诊断用；没有就是空串）。"""
     return _PROVIDER_SOURCE
-
-
-def provider_warnings() -> list[str]:
-    """provider 清单的加载告警（诊断用）。"""
-    return list(_PROVIDER_WARNINGS)
 
 
 _merge_providers()

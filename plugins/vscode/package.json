@@ -1,7 +1,7 @@
 {
   "name": "agent-bridge-vscode",
   "displayName": "Agent Bridge（本机 Agent 派发）",
-  "description": "在一个面板里看清 13 个本机编码 Agent 谁可用、并把任务派给它们。装完按 F1 输入「Agent Bridge」即可用。",
+  "description": "在一个面板里看清 14 个本机编码 Agent 谁可用、并把任务派给它们。装完按 F1 输入「Agent Bridge」即可用。",
   "version": "0.3.0",
   "publisher": "local",
   "engines": { "vscode": "^1.85.0" },

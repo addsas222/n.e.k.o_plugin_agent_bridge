@@ -22,7 +22,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from bridge.config import BridgeConfig
 from bridge.registry import AGENT_SPECS, resolve_agent
-from bridge.runner import run_agent  # noqa: F401
+from bridge.runner import run_agent
 
 
 def one(agent_id: str, task: str, timeout: int) -> dict:

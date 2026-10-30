@@ -35,7 +35,7 @@
 ✔ Python 可用
     Python 3.13.12
 ✔ 控制台可达
-    http://127.0.0.1:8787 · 13 条路由
+    http://127.0.0.1:8787 · 14 条路由
 ✔ 有可用的 Agent
     12/13 就绪；需登录：gemini、command-code、pi、omp
 ✔ MCP 已注册给 VS Code

@@ -56,6 +56,8 @@ CONFIG_PATH = Path(
 """写 enabled 开关的位置。与 ``bridge/config.py`` 认同一个环境变量，
 这样测试可以指到临时文件，不会动用户的真实配置。"""
 NEEDS_LOGIN: set[str] = set()
+"""本进程内被判定「没登录」的 Agent。与插件的内存行为一致：重启即清。"""
+
 _SLOW: set[str] = set()
 """探测超时/无输出的 Agent。**不等于不可用** —— 有的 CLI 未登录时静默挂起
 （实测 step 40s+ 零输出）。面板要把这种和「可派发」分开，否则用户会以为它能用。"""
@@ -65,9 +67,8 @@ _VERSION_CACHE: dict[str, tuple[float, str]] = {}
 12 行全点一遍等于把面板卡死几分钟 —— 而且用户会以为"点了没反应"。"""
 VERSION_TTL = 600.0
 AUDIT_PATH = CONFIG_PATH.parent / "dispatch.jsonl"
-"""面板自己的派发记录。以前这里只读不写，于是"最近派发"永远显示别人的旧日志 —— 
+"""面板自己的派发记录。以前这里只读不写，于是"最近派发"永远显示别人的旧日志 ——
 用户看到的就是一屏假数据。现在每次派发都落一条带 ts 和 source 的记录。"""
-"""本进程内被判定「没登录」的 Agent。与插件的内存行为一致：重启即清。"""
 
 
 def _warm_versions() -> None:
@@ -205,33 +206,6 @@ def harness_rows() -> list[dict]:
                 }
             )
     return out
-
-
-def route_install_info() -> list[dict]:
-    """可路由 Agent 的安装信息：缺什么、怎么装、装到哪查。
-
-    只暴露白名单里的 `install_cmd`（来自 provider.toml），绝不接受前端传命令。
-    """
-    config = load_config()
-    out: list[dict] = []
-    for spec in list_specs():
-        override = config.override_for(spec.id)
-        resolved = resolve_agent(spec, override.exe_override)
-        out.append(
-            {
-                "id": spec.id,
-                "installed": resolved.exists,
-                "binary": spec.binary,
-                "source": resolved.source,
-                "detail": resolved.detail,
-                "version": _VERSION_CACHE.get(spec.id, (0, ""))[1],
-                "slow": spec.id in _SLOW,
-                "install_cmd": getattr(spec, "install_cmd", ""),
-                "install_hint": getattr(spec, "install_hint", ""),
-            }
-        )
-    return out
-
 
 
 def write_enabled(agent: str, enabled: bool) -> dict:

@@ -5,7 +5,8 @@ N.E.K.O 本机 Agent 桥接插件。把本机的编码 Agent CLI 桥接成 N.E.K
 
 内置 9 个：CodeBuddy / Claude Code / dsh / omp / EvoX / OpenCode / OpenClaw / AtomCode /
 QwenPaw。**其余通过 `providers/<id>/provider.toml` 动态登记**（本仓库自带 Gemini CLI /
-Command Code / pi），新增一个 Agent = 放一个目录，不改任何 Python。
+Command Code / pi / Hermes / StepCode，合计 **14 条路由**），新增一个 Agent = 放一个目录，
+不改任何 Python。
 
 - 路由机制与扩展方式：[`docs/agent-routing.md`](docs/agent-routing.md)
 - 清单字段与命名约定：[`providers/README.md`](providers/README.md)
