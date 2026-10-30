@@ -38,6 +38,8 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
+from provider_manifest import discover as discover_providers  # 与本文件同目录，随 skill 分发
+
 __version__ = "0.1.0"
 
 PLUGIN_PORT_DEFAULT = 48916
@@ -231,68 +233,44 @@ def _provider_roots() -> list[Path]:
 def _load_providers() -> list[str]:
     """把 ``providers/*/provider.toml`` 合并进 AGENT_SPECS / AGENT_ALIASES。
 
-    返回告警。**不覆盖**已有 id：内置那 9 个仍然以本文件里的字面量为准，
-    provider 只负责新增。这样即使把一份坏清单放进目录，也不会悄悄改掉
-    ``claude`` 的调用方式。
+    解析本身交给 ``provider_manifest``（与插件侧共用同一份实现，见
+    ``bridge/provider_manifest.py``）。这里只做两件薄事：
+    把清单适配成本文件的 8 元组、并坚持「内置优先」。
+
+    返回告警。**不覆盖**已有 id：内置那 9 个仍以本文件里的字面量为准。
     """
     warnings: list[str] = []
-    root = next((path for path in _provider_roots() if path.is_dir()), None)
+    root = next((Path(p) for p in _provider_roots() if Path(p).is_dir()), None)
     if root is None:
         return warnings
 
-    try:
-        import tomllib as _toml
-    except ModuleNotFoundError:  # Python 3.9 / 3.10
-        try:
-            import tomli as _toml  # type: ignore[no-redef]
-        except ModuleNotFoundError:
-            return ["provider 目录被跳过：需要 Python 3.11+ 或安装 tomli"]
+    manifests, parse_warnings = discover_providers(str(root))
+    warnings.extend(parse_warnings)
 
-    for directory in sorted(root.iterdir()):
-        if not directory.is_dir() or directory.name.startswith((".", "_")):
+    for manifest in manifests:
+        pid = manifest.id
+        if pid in AGENT_SPECS:
+            warnings.append(f"provider {pid!r} 与已登记 Agent 同名，已跳过（内置优先）")
             continue
-        manifest_path = directory / "provider.toml"
-        if not manifest_path.is_file():
-            continue
-        try:
-            with open(manifest_path, "rb") as handle:
-                raw = _toml.load(handle)
-            section = raw["provider"]
-            pid = str(section["id"]).strip()
-            if pid != directory.name:
-                warnings.append(f"{manifest_path} 的 id={pid!r} 与目录名不一致，已跳过")
+        AGENT_SPECS[pid] = (
+            manifest.label,
+            manifest.binary,
+            manifest.mode,
+            manifest.fixed_args,
+            manifest.prompt_flag,
+            manifest.model_flag,
+            manifest.json_args,
+            manifest.notes,
+        )
+        PROVIDER_AUTH[pid] = (manifest.auth_patterns, manifest.login_hint)
+        for alias in manifest.aliases:
+            key = alias.strip().lower()
+            if not key or key == pid:
                 continue
-            if pid in AGENT_SPECS:
-                warnings.append(f"provider {pid!r} 与已登记 Agent 同名，已跳过（内置优先）")
+            if key in AGENT_SPECS or (key in AGENT_ALIASES and AGENT_ALIASES[key] != pid):
+                warnings.append(f"provider {pid!r} 的别名 {key!r} 已被占用，已忽略")
                 continue
-            mode = str(section.get("mode") or "").strip()
-            if mode not in ("flag", "switch", "positional"):
-                warnings.append(f"{manifest_path} 的 mode={mode!r} 非法，已跳过")
-                continue
-            AGENT_SPECS[pid] = (
-                str(section.get("label") or pid),
-                str(section.get("binary") or pid),
-                mode,
-                tuple(str(item) for item in section.get("fixed_args") or ()),
-                section.get("prompt_flag"),
-                section.get("model_flag"),
-                tuple(str(item) for item in section.get("json_args") or ()),
-                str(section.get("notes") or ""),
-            )
-            PROVIDER_AUTH[pid] = (
-                tuple(str(item) for item in section.get("auth_patterns") or ()),
-                str(section.get("login_hint") or ""),
-            )
-            for alias in section.get("aliases") or ():
-                key = str(alias).strip().lower()
-                if not key or key == pid:
-                    continue
-                if key in AGENT_SPECS or (key in AGENT_ALIASES and AGENT_ALIASES[key] != pid):
-                    warnings.append(f"provider {pid!r} 的别名 {key!r} 已被占用，已忽略")
-                    continue
-                AGENT_ALIASES[key] = pid
-        except Exception as exc:  # noqa: BLE001 — 一份坏清单不该让整个 skill 起不来
-            warnings.append(f"{manifest_path} 解析失败，已跳过：{type(exc).__name__}: {exc}")
+            AGENT_ALIASES[key] = pid
     return warnings
 
 

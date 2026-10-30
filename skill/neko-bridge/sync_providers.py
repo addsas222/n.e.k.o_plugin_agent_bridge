@@ -29,6 +29,9 @@ from pathlib import Path
 SKILL_DIR = Path(__file__).resolve().parent
 SOURCE = SKILL_DIR.parents[1] / "providers"      # <repo>/providers
 TARGET = SKILL_DIR / "providers"
+# 解析器也要带过去：skill 被单独拷到别的 Agent 环境后，不能依赖 bridge/ 包。
+MODULE_SOURCE = SKILL_DIR.parents[1] / "bridge" / "provider_manifest.py"
+MODULE_TARGET = SKILL_DIR / "bin" / "provider_manifest.py"
 
 #: 只同步这些文件名（``SKILL.md`` 是给 Agent 看的说明，一并带过去）。
 PAYLOAD = ("provider.toml", "SKILL.md", "README.md")
@@ -49,6 +52,8 @@ def wanted_files() -> list[tuple[Path, Path]]:
             source = directory / name
             if source.is_file():
                 pairs.append((source, TARGET / directory.name / name))
+    if MODULE_SOURCE.is_file():
+        pairs.append((MODULE_SOURCE, MODULE_TARGET))
     return pairs
 
 
