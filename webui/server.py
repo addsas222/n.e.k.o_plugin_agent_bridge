@@ -2,9 +2,9 @@
 # -*- coding: utf-8 -*-
 """agent_bridge 的本地控制台（HTTP + 静态页，纯标准库）。
 
-    python webui/server.py                 # http://127.0.0.1:8787
-    python webui/server.py --port 8790
-    python webui/server.py --open          # 起完自动开浏览器
+    python -m webui.server                 # http://127.0.0.1:8787
+    python -m webui.server --port 8790
+    python -m webui.server --open          # 起完自动开浏览器
 
 只绑 127.0.0.1：这是个能**真派发任务**的入口，暴露到局域网等于把本机 CLI 交出去。
 
@@ -37,13 +37,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT))
+from bridge.config import AgentOverride, load_config
+from bridge.registry import AGENT_SPECS, canonical_id, list_specs, resolve_agent
+from bridge.runner import probe_version, run_agent
+from bridge.tools import write_audit
 
-from bridge.config import AgentOverride, load_config  # noqa: E402
-from bridge.registry import AGENT_SPECS, canonical_id, list_specs, resolve_agent  # noqa: E402
-from bridge.runner import probe_version, run_agent  # noqa: E402
-from bridge.tools import write_audit  # noqa: E402
+ROOT = Path(__file__).resolve().parents[1]
 
 BUILD = "r5"
 """服务端构建号。页面会拿它比对 —— 前后端版本不一致时，功能会「点了没反应」，

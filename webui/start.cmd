@@ -13,5 +13,5 @@ if errorlevel 1 (
 echo Agent Bridge console  -^>  http://127.0.0.1:8787/
 echo Close this window to stop it.
 start "" http://127.0.0.1:8787/
-python webui\server.py --port 8787
+python -m webui.server --port 8787
 pause

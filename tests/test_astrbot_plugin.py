@@ -154,7 +154,7 @@ def test_dispatch_requires_console(monkeypatch) -> None:
 
     text = asyncio.run(run())
     assert "连不上" in text
-    assert "webui/server.py" in text
+    assert "webui.server" in text or "webui/server.py" in text
 
 
 @pytest.mark.parametrize("command", ["/bridge", "/bridge_status"])

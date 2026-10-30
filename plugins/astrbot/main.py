@@ -9,7 +9,7 @@
 最稳的边界是**本地 HTTP**（127.0.0.1:8787），和 VS Code 扩展用同一套接口。
 零第三方依赖：只用标准库 urllib，在线程里跑，不阻塞事件循环。
 
-前置：先起控制台 `python webui/server.py`（默认 8787）。
+前置：先起控制台 `python -m webui.server`（默认 8787）。
 """
 
 from __future__ import annotations
@@ -67,7 +67,7 @@ class Main(star.Star):
         except Exception as exc:  # noqa: BLE001 —— 出错要回人话，不是抛栈
             yield event.plain_result(
                 f"连不上 agent_bridge 控制台（{BASE_URL}）：{exc}\n"
-                f"先在终端跑 `python webui/server.py`。"
+                f"先在终端跑 `python -m webui.server`。"
             )
             return
 
@@ -112,7 +112,7 @@ class Main(star.Star):
         except Exception as exc:  # noqa: BLE001
             yield event.plain_result(
                 f"连不上 agent_bridge 控制台（{BASE_URL}）：{exc}\n"
-                f"先在终端跑 `python webui/server.py`。"
+                f"先在终端跑 `python -m webui.server`。"
             )
             return
 

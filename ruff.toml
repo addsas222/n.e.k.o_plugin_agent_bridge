@@ -7,11 +7,3 @@ respect-gitignore = false
 
 [lint]
 select = ["E4", "E7", "E9", "F", "I"]
-
-# 这些是**脚本**，不是包：必须先 sys.path.insert 才能 import 同级的 bridge/。
-# E402（import 不在文件顶部）在这里是结构必然，不是风格问题。
-# 放在配置里而不是每行 `# noqa`：旧版 ruff（CI 用的那个）不认行尾 noqa，只认配置。
-[lint.per-file-ignores]
-"tools/*.py" = ["E402"]
-"webui/*.py" = ["E402"]
-"tests/*.py" = ["E402"]

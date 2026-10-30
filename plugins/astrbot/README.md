@@ -10,7 +10,7 @@
 
 ```bash
 # 1. 起控制台（插件自己不启动它）
-python webui/server.py        # http://127.0.0.1:8787
+python -m webui.server        # http://127.0.0.1:8787
 
 # 2. 把本目录拷进 AstrBot 的插件目录
 #    默认是 <AstrBot>/data/plugins/<插件名>/（数据根可用 ASTRBOT_ROOT 覆盖）

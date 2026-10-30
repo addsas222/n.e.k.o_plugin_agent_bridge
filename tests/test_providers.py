@@ -15,13 +15,8 @@ from pathlib import Path
 
 import pytest
 
-ROOT = Path(__file__).resolve().parents[1]
-PROVIDERS = ROOT / "providers"
-
-sys.path.insert(0, str(ROOT))
-
-from bridge.providers import load_into  # noqa: E402
-from bridge.registry import (  # noqa: E402  —— 必须在 sys.path 调整之后
+from bridge.providers import load_into
+from bridge.registry import (
     AGENT_SPECS,
     ALIASES,
     AgentSpec,
@@ -29,7 +24,10 @@ from bridge.registry import (  # noqa: E402  —— 必须在 sys.path 调整之
     canonical_id,
     resolve_agent,
 )
-from bridge.runner import _detect_auth_failure  # noqa: E402
+from bridge.runner import _detect_auth_failure
+
+ROOT = Path(__file__).resolve().parents[1]
+PROVIDERS = ROOT / "providers"
 
 
 def provider_dirs() -> list[Path]:

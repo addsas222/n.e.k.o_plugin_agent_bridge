@@ -14,20 +14,15 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
-from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT))
-
-import asyncio  # noqa: E402
-
-from bridge.config import BridgeConfig  # noqa: E402
-from bridge.registry import AGENT_SPECS, resolve_agent  # noqa: E402
-from bridge.runner import run_agent  # noqa: E402
+from bridge.config import BridgeConfig
+from bridge.registry import AGENT_SPECS, resolve_agent
+from bridge.runner import run_agent  # noqa: F401
 
 
 def one(agent_id: str, task: str, timeout: int) -> dict:
