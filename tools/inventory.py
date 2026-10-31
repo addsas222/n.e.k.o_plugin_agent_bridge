@@ -25,6 +25,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tomllib
 from pathlib import Path
 
@@ -52,6 +53,20 @@ KEYWORDS: dict[str, str] = {
 
 #: 明显不是 Agent 的（命中关键词但属工具/编辑器）。
 NOT_AGENT = {"obsidian", "notion", "ollama", "neko"}
+
+
+def _force_utf8_stdout() -> None:
+    """Windows 控制台默认不是 UTF-8（GitHub Actions 上是 cp1252）。
+
+    脚本会打印中文，不重配的话 `print()` 直接 UnicodeEncodeError 退出 ——
+    这不是编码洁癖，是会让 `--check` 这类命令在 Windows 上整条挂掉。
+    """
+    stream = getattr(sys, "stdout", None)
+    if stream is not None and hasattr(stream, "reconfigure"):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (OSError, ValueError):  # 管道已关闭等极端情况，忽略
+            pass
 
 
 def read_registry() -> list[dict]:
@@ -269,6 +284,7 @@ def to_markdown(data: dict) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
+    _force_utf8_stdout()
     parser = argparse.ArgumentParser(description="只读清点本机 harness")
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--stdout", action="store_true", help="只打印，不写文件")

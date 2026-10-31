@@ -38,6 +38,20 @@ PAYLOAD = ("SKILL.md", "README.md", "bin", "providers")
 SKIP_MARKERS = ("副本", "copy", "backup", "bak")
 
 
+def _force_utf8_stdout() -> None:
+    """Windows 控制台默认不是 UTF-8（GitHub Actions 上是 cp1252）。
+
+    脚本会打印中文，不重配的话 `print()` 直接 UnicodeEncodeError 退出 ——
+    这不是编码洁癖，是会让 `--check` 这类命令在 Windows 上整条挂掉。
+    """
+    stream = getattr(sys, "stdout", None)
+    if stream is not None and hasattr(stream, "reconfigure"):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (OSError, ValueError):  # 管道已关闭等极端情况，忽略
+            pass
+
+
 def load_matrix() -> list[dict]:
     try:
         import tomllib
@@ -112,6 +126,7 @@ def generic_mcp_json(binary: str) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
+    _force_utf8_stdout()
     parser = argparse.ArgumentParser(prog="install-neko-bridge", description="把 neko-bridge 装到各 Agent 框架")
     parser.add_argument("--home", default=str(Path.home()))
     parser.add_argument("--list", action="store_true")

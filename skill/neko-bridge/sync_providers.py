@@ -37,6 +37,20 @@ MODULE_TARGET = SKILL_DIR / "bin" / "provider_manifest.py"
 PAYLOAD = ("provider.toml", "SKILL.md", "README.md")
 
 
+def _force_utf8_stdout() -> None:
+    """Windows 控制台默认不是 UTF-8（GitHub Actions 上是 cp1252）。
+
+    脚本会打印中文，不重配的话 `print()` 直接 UnicodeEncodeError 退出 ——
+    这不是编码洁癖，是会让 `--check` 这类命令在 Windows 上整条挂掉。
+    """
+    stream = getattr(sys, "stdout", None)
+    if stream is not None and hasattr(stream, "reconfigure"):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (OSError, ValueError):  # 管道已关闭等极端情况，忽略
+            pass
+
+
 def wanted_files() -> list[tuple[Path, Path]]:
     """返回 (源, 目标) 对，按 provider id 排序。"""
     pairs: list[tuple[Path, Path]] = []
@@ -58,6 +72,7 @@ def wanted_files() -> list[tuple[Path, Path]]:
 
 
 def main(argv: list[str] | None = None) -> int:
+    _force_utf8_stdout()
     parser = argparse.ArgumentParser(prog="sync-providers", description="同步 providers/ 到 skill 副本")
     parser.add_argument("--check", action="store_true", help="只校验，不一致返回退出码 2")
     parser.add_argument("--apply", action="store_true", help="真的写入")
