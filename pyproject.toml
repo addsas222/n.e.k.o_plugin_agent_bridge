@@ -20,3 +20,10 @@ filterwarnings = [
 
 asyncio_mode = "auto"
 testpaths = ["tests"]
+
+# 用 importlib 模式按文件路径导入测试模块。
+# 默认的 prepend 模式会把**仓库根目录**当成包导入，于是执行根 `__init__.py`
+# 时去 import 宿主的 plugin.sdk —— 本地因为目录名恰好是 agent_bridge、
+# 被 conftest 的命名空间桩挡住，所以一直没暴露；CI 的检出目录名是
+# n.e.k.o_plugin_agent_bridge，直接就 ModuleNotFoundError 了。
+addopts = "--import-mode=importlib"
