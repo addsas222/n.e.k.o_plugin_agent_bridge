@@ -5,14 +5,19 @@
 #
 # 两个平台都跑：本仓库大量逻辑是跨平台的（argv 构造、清单解析、MCP 装配），
 # 但 cmd.exe / winreg 相关的分支只在 Windows 上有意义，那边有 skipif 守着。
+#
+# 同时作为 release.yml 的**前置门禁**（workflow_call）：tag 触发发布时，
+# 这套测试必须先绿，否则 Release 那一步根本不会开始。
 
 name: Tests
 
 on:
   push:
     branches: [main]
+    tags: ["v*"]
   pull_request:
   workflow_dispatch:
+  workflow_call:   # 供 release.yml 复用：tests 不绿 → 不发布
 
 concurrency:
   group: tests-${{ github.ref }}
