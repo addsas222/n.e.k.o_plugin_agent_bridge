@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def _decorated_entries() -> dict[str, str]:
-    tree = ast.parse((ROOT / "__init__.py").read_text(encoding="utf-8"))
+    tree = ast.parse((ROOT / "_plugin.py").read_text(encoding="utf-8"))
     found: dict[str, str] = {}
     for node in ast.walk(tree):
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
