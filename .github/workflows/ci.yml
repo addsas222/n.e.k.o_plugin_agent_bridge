@@ -1,0 +1,52 @@
+# 功能测试：跑 tests/ 下的 pytest 套件。
+#
+# 为什么单独一个 workflow：N.E.K.O 的 Verify 只做 lint + 插件包结构校验，
+# **不跑 pytest**。也就是说"CI 绿"从来不代表功能没坏 —— 这一条补的正是那个缺口。
+#
+# 两个平台都跑：本仓库大量逻辑是跨平台的（argv 构造、清单解析、MCP 装配），
+# 但 cmd.exe / winreg 相关的分支只在 Windows 上有意义，那边有 skipif 守着。
+
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  pytest:
+    name: pytest · ${{ matrix.os }} · py${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ["3.11"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: 安装测试依赖
+        run: |
+          python -m pip install --upgrade pip
+          # pytest-asyncio 是必需的：pyproject 里 asyncio_mode = "auto"
+          python -m pip install pytest pytest-asyncio
+
+      - name: 准备 Node（webui/smoke.js 需要；缺了那条测试会 skip）
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: 跑测试
+        run: python -m pytest tests -q
