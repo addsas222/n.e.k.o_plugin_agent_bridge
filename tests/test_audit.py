@@ -18,6 +18,10 @@ from typing import Any
 
 import pytest
 
+# isort: split
+# bridge 在插件仓库内是一方包、在 CI 的检出布局下会被当成三方包；
+# 显式切段，两种 cwd 下的 I001 判定就都稳定了。
+
 from bridge.audit import (
     ACTION_ALLOW,
     ACTION_BLOCK,
