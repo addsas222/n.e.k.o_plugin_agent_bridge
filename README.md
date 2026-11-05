@@ -149,6 +149,10 @@ python -m src.daemon.server --port 8787
 
 > 只想确认通不通？打开插件的「诊断桥接链路」入口（`agent_doctor`），
 > 报告里会有一行 `哨兵：已连接 …` / `哨兵：已启用但连不上 …`，不用去翻日志。
+>
+> 从插件市场安装的副本通常**不含子模块内容**。这时把哨兵单独
+> `git clone https://github.com/silverwolftyro/sentinel` 到任意目录，
+> 在那边跑同一条启动命令即可——插件只认 `url`，不认它放在哪。
 
 ### 配置项（plugin.toml 的 `[bridge.sentinel]`）
 

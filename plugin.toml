@@ -80,8 +80,8 @@ max_parallel = 4
 # 哨兵（Sentinel，GPL-3.0）安全审计集成（可选，默认关闭）
 # 哨兵是独立进程（git submodule：vendor/sentinel），本插件只通过它本机 127.0.0.1 的
 # HTTP 接口对接，不引入任何 GPL 源码（详见仓库根 NOTICE）。
-# 启用：先 `git submodule update --init vendor/sentinel`，再 `python -m src.daemon.server
-# --port 8787` 拉起守护进程，然后把下面 enabled 改为 true。
+# 启用：先 `git submodule update --init vendor/sentinel`（市场安装的副本请单独 clone
+# 哨兵），再 `python -m src.daemon.server --port 8787` 拉起守护进程，然后把下面 enabled 改为 true。
 # [bridge.sentinel]
 # enabled = false
 # url = "http://127.0.0.1:8787"
