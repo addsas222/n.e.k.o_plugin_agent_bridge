@@ -481,19 +481,27 @@ class AgentBridgePlugin(NekoPluginBase):
             lines.append(f"运行时覆盖：{runtime_path}")
         lines.append(f"审计日志：{config.audit_log or '（关闭）'}")
 
-        # 哨兵是独立进程，健康检查走本机 HTTP（最多 timeout 秒）。放到线程里，
+        # 审计层：内置后端在进程内判定，HTTP 后端才需要走网络。放到线程里，
         # 别让一次诊断把宿主事件循环卡住。
         sentinel_info = await asyncio.to_thread(status_snapshot, config.sentinel)
         if not sentinel_info["enabled"]:
-            lines.append("哨兵：未启用（可选，见 README「Sentinel 安全审计集成」）")
+            lines.append("安全审计：未启用（可选，见 README「安全审计集成」）")
+        elif sentinel_info["backend"] == "builtin":
+            lines.append(
+                "安全审计：内置后端 · v{version} · 会话 {sessions}（进程内判定，无需外部进程）".format(
+                    **sentinel_info
+                )
+            )
         elif sentinel_info["reachable"]:
             lines.append(
-                "哨兵：已连接 {url} · v{version} · 会话 {sessions}（L2 休眠 {l2_sleeping}）".format(
+                "安全审计：外部后端 {url} · v{version} · 会话 {sessions}（L2 休眠 {l2_sleeping}）".format(
                     **sentinel_info
                 )
             )
         else:
-            lines.append(f"哨兵：已启用但连不上 {sentinel_info['url']}（fail-open，不影响派发）")
+            lines.append(
+                f"安全审计：外部后端 {sentinel_info['url']} 连不上（fail-open，不影响派发）"
+            )
 
         # 先并行探测版本号，再拼报告 —— 串行探测 9 个 Agent 最坏 405 秒，
         # 会把入口跑过宿主看门狗（同 agents_list 的处理）。

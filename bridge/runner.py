@@ -468,25 +468,27 @@ async def _execute(
 
 
 _SENTINEL_ATTACH_DELAY = 2.0
-"""进程拉起后延迟多久再挂给哨兵（秒）。
+"""进程拉起后延迟多久再登记会话（秒）。
 
-哨兵的 ``/api/attach`` 会按 cwd 扫会话日志，扫不到就起一个**空跟读线程**并立即退出；
-而进程刚起来的那一瞬间日志往往还没落盘。延迟放在后台线程里，既不阻塞管道读取，
-也给 CLI 留出写首行的时间。
+进程刚起来的那一瞬间，Agent 往往还没写出会话日志。延迟放在后台线程里，既不阻塞
+管道读取，也给 CLI 留出写首行的时间。
+
+内置后端只是把这一路登记进会话表（它不猜日志路径）；外部 HTTP 后端会按 cwd 扫
+会话日志，扫不到就起一个空跟读线程并立即退出——两种情况都不影响派发。
 """
 
 
 def _attach_in_background(client, *, cwd: str, pid: int, agent: str) -> None:
-    """派发成功后把这一路挂给哨兵（best-effort，绝不阻塞/影响派发）。"""
+    """派发成功后把这一路登记给审计层（best-effort，绝不阻塞/影响派发）。"""
 
     def _run() -> None:
         try:
             time.sleep(_SENTINEL_ATTACH_DELAY)
             snapshot = client.attach(cwd=cwd or "", pid=pid, agent=agent)
             if isinstance(snapshot, dict) and not snapshot.get("log_path"):
-                logger.debug("哨兵挂接成功但未找到会话日志（pid=%s, agent=%s）", pid, agent)
-        except Exception as exc:  # noqa: BLE001 —— 监控挂接失败不得影响派发
-            logger.debug("哨兵挂接失败（已忽略）：%s: %s", type(exc).__name__, exc)
+                logger.debug("会话已登记但未关联日志（pid=%s, agent=%s）", pid, agent)
+        except Exception as exc:  # noqa: BLE001 —— 登记失败不得影响派发
+            logger.debug("会话登记失败（已忽略）：%s: %s", type(exc).__name__, exc)
 
     threading.Thread(target=_run, daemon=True, name="sentinel-attach").start()
 

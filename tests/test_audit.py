@@ -25,11 +25,13 @@ import pytest
 from bridge.audit import (
     ACTION_ALLOW,
     ACTION_BLOCK,
+    BuiltinBackend,
     PreCheckResult,
     SentinelClient,
     build_client,
     gated_pre_check,
     is_loopback_url,
+    resolve_backend,
     status_snapshot,
 )
 from bridge.config import BridgeConfig, SentinelConfig, config_from_dict
@@ -167,9 +169,23 @@ def test_attach_records_payload(sentinel_server):
 
 def test_build_client_disabled():
     assert build_client(SentinelConfig(enabled=False)) is None
-    # 启用但没配地址 → 也算不可用
-    assert build_client(SentinelConfig(enabled=True, url="")) is None
+    # 启用但不给 url → 走内置后端（默认推荐路径，不需要外部进程）
+    assert isinstance(build_client(SentinelConfig(enabled=True, url="")), BuiltinBackend)
+    # 显式要 http 却没地址 → 不可用，别静默退回内置
+    assert build_client(SentinelConfig(enabled=True, backend="http", url="")) is None
     assert build_client(SentinelConfig(enabled=True, url="http://127.0.0.1:8787")) is not None
+
+
+def test_resolve_backend_inference():
+    # 没配 backend 也没 url → 内置
+    assert resolve_backend(SentinelConfig()) == "builtin"
+    # 配了 url 说明手里有外部守护进程，尊重它
+    assert resolve_backend(SentinelConfig(url="http://127.0.0.1:8787")) == "http"
+    # 显式配置优先于推断
+    assert resolve_backend(SentinelConfig(backend="builtin", url="http://127.0.0.1:8787")) == "builtin"
+    assert resolve_backend(SentinelConfig(backend="http")) == "http"
+    # 乱写的值退回推断
+    assert resolve_backend(SentinelConfig(backend="grpc", url="http://127.0.0.1:8787")) == "http"
 
 
 def test_build_client_rejects_non_loopback():
@@ -231,8 +247,13 @@ def test_config_reads_bridge_sentinel_section():
 def test_config_sentinel_invalid_values_fall_back():
     cfg = config_from_dict({"sentinel": {"enabled": "yes", "url": "", "timeout": -1}})
     assert cfg.sentinel.enabled is False
-    assert cfg.sentinel.url == "http://127.0.0.1:8787"
+    # url 默认为空串：默认后端是内置的，不需要外部地址
+    assert cfg.sentinel.url == ""
+    assert cfg.sentinel.backend == ""
     assert cfg.sentinel.timeout == 2.0
+    # 乱写的严重度门槛退回默认值
+    bad = config_from_dict({"sentinel": {"block_severity": "whatever"}})
+    assert bad.sentinel.block_severity == "standard"
 
 
 def test_gated_disabled_returns_none():
@@ -257,6 +278,54 @@ def test_gated_block_but_not_enforced_is_allowed(sentinel_server):
     # block_on_deny=false：判定为 block 但仍放行（只记录不拦截）。
     cfg = SentinelConfig(enabled=True, url=sentinel_server, block_on_deny=False)
     assert gated_pre_check(cfg, "BLOCKME 危险") is None
+
+
+# ---------------------------------------------------------------------------
+# 2b. 内置后端（默认路径，不起服务、不走网络）
+# ---------------------------------------------------------------------------
+
+
+def test_builtin_backend_blocks_red_line_without_any_server():
+    # 不配 url、不起进程 —— 内置哨兵在同一个进程里完成判定
+    cfg = SentinelConfig(enabled=True)
+    result = gated_pre_check(cfg, "rm -rf / --no-preserve-root")
+    assert result is not None
+    assert result.action == ACTION_BLOCK
+    assert result.rule_id == "catastrophic.root_delete"
+    assert result.degraded is False
+
+
+def test_builtin_backend_allows_safe_task():
+    cfg = SentinelConfig(enabled=True)
+    assert gated_pre_check(cfg, "帮我写一个快速排序函数") is None
+
+
+def test_builtin_backend_respects_block_on_deny():
+    cfg = SentinelConfig(enabled=True, block_on_deny=False)
+    assert gated_pre_check(cfg, "rm -rf /") is None
+
+
+def test_builtin_backend_severity_gate():
+    # 只拦不可逆操作时，可恢复的递归删除被放行
+    loose = SentinelConfig(enabled=True, block_severity="red_line")
+    assert gated_pre_check(loose, "rm -rf node_modules") is None
+    # 但红线照样拦
+    assert gated_pre_check(loose, "rm -rf /") is not None
+
+
+def test_builtin_backend_health_and_status():
+    cfg = SentinelConfig(enabled=True)
+    info = status_snapshot(cfg)
+    assert info["backend"] == "builtin"
+    assert info["reachable"] is True
+    assert info["version"]
+
+
+def test_builtin_backend_attach_registers_session():
+    client = build_client(SentinelConfig(enabled=True))
+    snapshot = client.attach(cwd="D:/work/demo", pid=4242, agent="codebuddy")
+    assert snapshot["pid"] == 4242
+    assert client.health().sessions == 1
 
 
 # ---------------------------------------------------------------------------

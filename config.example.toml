@@ -25,22 +25,20 @@ max_parallel = 4
 # timeout_seconds = 900
 
 # ---------------------------------------------------------------------------
-# 哨兵（Sentinel，GPL-3.0）安全审计集成（可选，默认关闭）
+# 安全审计（L1 派发前预检，默认关闭）
 # ---------------------------------------------------------------------------
-# 本插件可对接「哨兵」这个独立的本机安全审计进程（git submodule：vendor/sentinel），
-# 在派发任务前用它的 L1 规则做一次秒级安全预检，命中红线/危险词则拒绝派发；
-# 派发后还可把这一路会话挂给它后台静默监控。
-# 哨兵是**独立进程**，本插件只通过它本机 127.0.0.1 的 HTTP 接口对接，
-# 不引入任何 GPL 源码（详见仓库根 NOTICE）。
+# 插件自带一份精简审计器（bridge/sentinel_core，MIT，纯标准库约 1.8k 行）：
+# 派发前对任务文本做一次秒级规则预检，命中「一旦执行就回不来」的操作就拒绝派发。
+# 内置后端在**同一进程内**判定，不需要起服务、不需要额外进程、不需要联网。
 #
-# 启用步骤：
-#   1) 拉起哨兵守护进程：  git submodule update --init vendor/sentinel
-#                          然后 python -m src.daemon.server --port 8787
-#   2) 把下面 enabled 改为 true。
+# 想对接上游完整版 Sentinel（GPL-3.0，含 GUI 与语义判定）时，把它单独跑起来，
+# 再设 backend = "http" 和 url —— 只走公开 HTTP 契约，不 import 它任何源码。
 #
 # [bridge.sentinel]
 # enabled = false
-# url = "http://127.0.0.1:8787"
-# block_on_deny = true      # 预检判定 block 时是否真的拒绝派发（false 则只记录）
-# attach = true             # 进程拉起后是否把会话挂给哨兵后台监控（best-effort）
-# timeout = 2.0             # 单个接口超时（秒）；哨兵未启动按 fail-open 处理
+# backend = "builtin"          # builtin（进程内）| http（外部守护进程）
+# url = ""                     # 仅 backend=http 时使用，只允许本机回环
+# block_on_deny = true         # 命中后是否真的拒绝派发（false 则只记录）
+# block_severity = "standard"  # standard（含可恢复高危）| red_line（只拦不可逆）
+# attach = true                # 派发后是否把会话登记给审计层（best-effort）
+# timeout = 2.0                # HTTP 后端的单次超时（秒）

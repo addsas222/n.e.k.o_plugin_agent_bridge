@@ -1,3 +1,0 @@
-[submodule "vendor/sentinel"]
-	path = vendor/sentinel
-	url = https://github.com/silverwolftyro/sentinel.git

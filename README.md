@@ -72,8 +72,8 @@ max_parallel = 4
 
 ## 依赖
 
-纯标准库 + 宿主自带 SDK，**无第三方 Python 依赖**。`vendor/sentinel` 是可选审计进程的
-子模块（GPL-3.0，独立进程运行），插件自身**不 import** 它的任何源码，不装也能正常派发。
+纯标准库 + 宿主自带 SDK，**无第三方 Python 依赖**。安全审计也是内置的（`bridge/sentinel_core`），
+不需要额外的包、服务或子进程。
 
 ## 测试
 
@@ -96,8 +96,8 @@ providers/<id>/      每条动态路由：provider.toml + SKILL.md + README.md
 docs/agent-routing.md 路由机制、已知问题与扩展步骤
 ui/panel.tsx         Hosted TSX 面板
 skill/neko-bridge/   反向 Skill：把 N.E.K.O. 装进别的 Agent（自带 providers 副本）
-bridge/audit.py      哨兵本地 HTTP 客户端（纯标准库；不含任何 GPL 源码）
-vendor/sentinel/     哨兵子模块（GPL-3.0，可选，独立进程运行）
+bridge/audit.py      审计后端选择与闸门（内置 / 外部 HTTP 两条路径）
+bridge/sentinel_core/ 内置精简哨兵：规则、预检、会话表、四端点服务端
 ```
 
 ## 新增一个 Agent
@@ -113,72 +113,85 @@ python skill/neko-bridge/bin/neko.py dispatch myagent "只回一个字：好"
 字段说明见 [`providers/README.md`](providers/README.md)，完整步骤见
 [`docs/agent-routing.md`](docs/agent-routing.md) §8。
 
-## Sentinel 安全审计集成（可选）
+## 安全审计集成（内置 L1 预检）
 
-本插件可对接 **[哨兵 Sentinel](https://github.com/silverwolftyro/sentinel)**——一个只读的
-Agent 自动审计员，提供 L1 规则红线拦截、意图漂移检测与守护者挂起能力。合并进来后，
-agent_bridge 在**派发任务前**会用哨兵的 L1 规则做一次秒级安全预检，命中红线/危险词就
-**拒绝派发**；派发时还能把这一路会话挂给哨兵后台静默监控。
+插件自带一份精简的安全审计器（`bridge/sentinel_core/`，**MIT**，纯标准库，约 1.8k 行）。
+它在**派发任务前**对用户那句话做一次秒级规则预检：命中「一旦执行就回不来」的操作
+就直接拒绝派发，任务根本不会交给 Agent。
 
-### 为什么是「子模块 + HTTP 接口」
+### 能拦什么
 
-哨兵以 **GPL-3.0** 发布，本插件随 N.E.K.O 项目采用 **MIT**。为避免 GPL 的 copyleft 把本仓库
-整体拖入 GPL，本插件**不并入哨兵源码**，而是：
+| 类别 | 例子 |
+|------|------|
+| 删根 | `rm -rf /`、`rm -rf ~`、`rm -rf /*`、`sudo rm -rf /etc` |
+| 抹盘 | `mkfs.ext4 /dev/sdb1`、`dd of=/dev/sda`、`format C:`、`cat img > /dev/sda` |
+| 下载即执行 | `curl … \| sh`、`wget … \| sudo bash`、`curl … \| python` |
+| 批量删除 | `find / -name '*.log' -delete` |
+| 拆访问控制 | `chmod -R 777 /` |
+| 普通高危（可恢复） | `rm -rf <目录>`、`git push --force`、`shutdown`、`takeown`、`history -c` |
 
-1. 把哨兵作为 **git submodule** 放进仓库（`vendor/sentinel`），代码留在独立 Git 对象里、保持
-   GPL-3.0 不变；
-2. 在 `bridge/audit.py` 中只写一个**纯标准库**的 HTTP 客户端，通过哨兵 v5 无头守护进程的
-   本地接口（默认 `127.0.0.1:8787`）对接——这是哨兵 README 中明确为「第三方 Agent 插件」
-   预留的安检/挂起接口。
+判定基于**结构化特征**（路径分类、参数标志、管道方向），不是「看起来像危险命令」的
+模糊匹配——所以 `rm -rf ./dist` 和 `rm -rf /usr` 会被区分开，`echo hi > /dev/null`
+不会误报成写盘。
 
-许可边界与分发义务见仓库根 [`NOTICE`](NOTICE)。
+### 不拦什么
 
-### 启用步骤
+* **语义级风险**：L1 只看字面，看不到意图。一句话里说「不要用 rm -rf /」也会命中。
+* **分步实施的危险**：先 `cd ..` 再 `rm -rf` 这种跨轮次的组合，单条规则看不出来。
 
-```bash
-# 1) 拉取哨兵子模块源码（仅首次）
-git submodule update --init vendor/sentinel
+这类判定需要模型参与，属于完整版哨兵的能力范围，本模块不打算复刻。
 
-# 2) 在本机拉起哨兵无头守护进程（只绑 127.0.0.1）
-cd vendor/sentinel
-python -m src.daemon.server --port 8787
-#   （另开一个终端跑插件即可；哨兵进程挂掉不影响派发，本插件会 fail-open 放行）
+### 启用
 
-# 3) 在 plugin.toml 的 [bridge.sentinel] 里把 enabled 改为 true
+```toml
+[bridge.sentinel]
+enabled = true
 ```
 
-> 只想确认通不通？打开插件的「诊断桥接链路」入口（`agent_doctor`），
-> 报告里会有一行 `哨兵：已连接 …` / `哨兵：已启用但连不上 …`，不用去翻日志。
->
-> 从插件市场安装的副本通常**不含子模块内容**。这时把哨兵单独
-> `git clone https://github.com/silverwolftyro/sentinel` 到任意目录，
-> 在那边跑同一条启动命令即可——插件只认 `url`，不认它放在哪。
+就这样——内置后端在同一个进程里判定，不需要起服务、不需要额外进程、不需要联网。
 
-### 配置项（plugin.toml 的 `[bridge.sentinel]`）
+### 配置项（`plugin.toml` 的 `[bridge.sentinel]`，或 `config.json` 的 `[sentinel]`）
 
 | 字段 | 默认 | 说明 |
 |------|------|------|
-| `enabled` | `false` | 是否启用哨兵审计；关闭时派发路径零改动 |
-| `url` | `http://127.0.0.1:8787` | 哨兵守护进程地址（只允许本机回环，非回环地址会被直接拒绝） |
-| `block_on_deny` | `true` | 预检判定 `block` 时是否真的拒绝派发（`false` 则只记录不拦截） |
-| `attach` | `true` | 进程拉起后是否把会话挂给哨兵后台监控（延迟 2 秒，避开日志尚未落盘；best-effort） |
-| `timeout` | `2.0` | 单个接口超时（秒）；哨兵未启动按 fail-open 处理 |
+| `enabled` | `false` | 是否启用；关闭时派发路径零改动 |
+| `backend` | 自动 | `builtin`（进程内）或 `http`（外部守护进程）。留空时：配了 `url` 走 http，否则用内置 |
+| `url` | 空 | 外部守护进程地址（仅 `backend=http`；只允许本机回环，非回环地址直接拒绝） |
+| `block_on_deny` | `true` | 命中后是否真的拒绝派发（`false` 则只记录不拦截） |
+| `block_severity` | `standard` | 达到哪个严重度才拦。设成 `red_line` 就只拦不可逆操作，`rm -rf ./dist` 会放行（结果带 `suppressed: true`） |
+| `attach` | `true` | 进程拉起后是否把会话登记给审计层（延迟 2 秒，best-effort） |
+| `timeout` | `2.0` | HTTP 后端的单次超时（秒） |
 
 ### 行为约定
 
-* **默认关闭**：`enabled=false` 时，`run_agent` 完全不触碰哨兵，现有行为与回归测试不变。
-* **fail-open**：哨兵未启动 / 接口超时 / 返回异常时一律放行，安全审计是可选增强层，
-  绝不会因为哨兵没跑就把所有派发卡死。
-* **预检只上 L1**：纯规则、秒回、不调模型（哨兵侧保证）；语义级判定（L2）由哨兵在
-  `attach` 后的后台监控里完成。
-* **挂接不阻塞派发**：pid 在 `Popen` 之后立刻拿到，挂接在后台线程里延后 2 秒发出——
-  太早挂接时 Agent 还没写出会话日志，哨兵会挂到一个空跟读线程上。
-* **诊断可见**：`agent_doctor` 的报告与结构化结果里都有 `sentinel` 一节，
-  分别覆盖「未启用 / 已连接 / 启用了但连不上」三种状态。
-* **被拦下的任务**：结果是 `AGENT_BLOCKED_BY_SENTINEL`，并以 `SENTINEL_BLOCK` 状态回显，
-  任务根本不会交给 Agent。
+* **默认关闭**：`enabled=false` 时 `run_agent` 完全不触碰审计层，现有行为与回归测试不变。
+* **fail-open**：判定异常 / 规则引擎起不来 / HTTP 后端不可达，一律**放行**并标记 `degraded`。
+  安全层绝不能反过来成为可用性故障点。
+* **被拦下的任务**：结果是 `AGENT_BLOCKED_BY_SENTINEL`，以 `SENTINEL_BLOCK` 状态回显，
+  并带上 `rule_id` 与中文原因。
+* **诊断可见**：`agent_doctor` 会显示「未启用 / 内置后端 / 外部后端已连接 / 外部后端连不上」。
+
+### 想用完整版哨兵
+
+上游 [silverwolftyro/sentinel](https://github.com/silverwolftyro/sentinel) 是一个独立的
+桌面审计产品（GPL-3.0），包含 GUI、进程树扫描、多模型语义判定与守护者挂起。想对接它：
+
+```bash
+git clone https://github.com/silverwolftyro/sentinel
+cd sentinel && python -m src.daemon.server        # 默认只绑 127.0.0.1:8787
+```
+
+```toml
+[bridge.sentinel]
+enabled = true
+backend = "http"
+url = "http://127.0.0.1:8787"
+```
+
+插件只通过公开的 HTTP 契约通信，**不 import 它任何源码**——两边的许可各自独立。
+详见仓库根 [`NOTICE`](NOTICE)。
 
 ## 许可
 
-见仓库根 `LICENSE`（随 N.E.K.O 项目）。另见仓库根 [`NOTICE`](NOTICE) 关于哨兵 GPL-3.0
-子模块的许可边界与分发义务说明。
+见仓库根 `LICENSE`（随 N.E.K.O 项目）。内置安全审计模块为原创实现，同样在 MIT 之下；
+与上游哨兵的关系说明见 [`NOTICE`](NOTICE)。

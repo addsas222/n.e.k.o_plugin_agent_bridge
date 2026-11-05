@@ -60,23 +60,33 @@ class AgentOverride:
 
 @dataclass
 class SentinelConfig:
-    """哨兵（Sentinel，GPL-3.0）安全审计的对接配置。
+    """安全审计（L1 派发前预检）的配置。
 
-    哨兵以独立进程（git submodule：vendor/sentinel）形式存在，本插件只通过它的
-    本地 HTTP 接口（默认 127.0.0.1:8787）对接。**默认全部关闭**——未启用时
-    派发行为完全不变。详见仓库根 NOTICE 与 README 的「Sentinel 安全审计集成」一节。
+    默认走**内置后端**：插件自带一份精简哨兵（``bridge/sentinel_core``，MIT），
+    在进程内直接判定，不起服务、不走网络。想对接外部的完整版 Sentinel 时，
+    把 ``backend`` 设成 ``http`` 并给出 ``url``。
+
+    **默认全部关闭** —— 未启用时派发行为完全不变。
     """
 
     enabled: bool = False
-    """是否启用哨兵审计。关闭时派发路径零改动。"""
-    url: str = "http://127.0.0.1:8787"
-    """哨兵无头守护进程的地址（只允许本机回环）。"""
+    """是否启用安全审计。关闭时派发路径零改动。"""
+    backend: str = ""
+    """后端选择：``builtin``（进程内，默认）/ ``http``（外部守护进程）。
+
+    留空表示自动推断——配了 ``url`` 就走 http，否则用内置。
+    """
+    url: str = ""
+    """外部守护进程地址（只允许本机回环）；仅 ``backend=http`` 时使用。"""
     block_on_deny: bool = True
     """预检判定为 block 时，是否真的拒绝派发；设为 false 则只记录不拦截。"""
     attach: bool = True
-    """派发后是否把该路会话挂给哨兵后台静默监控（best-effort，依赖 Agent 产出可读日志）。"""
+    """派发后是否把该路会话登记给审计层后台监控（best-effort）。"""
     timeout: float = 2.0
-    """单个接口的超时（秒）；守护进程不可达时按 fail-open 处理。"""
+    """HTTP 后端的单次调用超时（秒）；不可达时按 fail-open 处理。"""
+    block_severity: str = "standard"
+    """达到哪个严重度才真的拦：``standard``（默认，含可恢复的高危操作）
+    或 ``red_line``（只拦不可逆操作，``rm -rf ./dist`` 这类会放行）。"""
 
 
 @dataclass
@@ -196,10 +206,12 @@ def config_from_dict(raw: Any, source_path: str = "") -> BridgeConfig:
 
 
 def _sentinel_from_dict(raw: dict[str, Any]) -> SentinelConfig:
-    """从字典构建哨兵配置；任何字段缺失/非法都退回默认值，绝不因配置写坏而崩。"""
+    """从字典构建安全审计配置；任何字段缺失/非法都退回默认值，绝不因配置写坏而崩。"""
     cfg = SentinelConfig()
     if isinstance(raw.get("enabled"), bool):
         cfg.enabled = raw["enabled"]
+    if isinstance(raw.get("backend"), str) and raw["backend"].strip():
+        cfg.backend = raw["backend"].strip().lower()
     if isinstance(raw.get("url"), str) and raw["url"].strip():
         cfg.url = raw["url"].strip()
     if isinstance(raw.get("block_on_deny"), bool):
@@ -208,6 +220,9 @@ def _sentinel_from_dict(raw: dict[str, Any]) -> SentinelConfig:
         cfg.attach = raw["attach"]
     if isinstance(raw.get("timeout"), (int, float)) and float(raw["timeout"]) > 0:
         cfg.timeout = float(raw["timeout"])
+    severity = raw.get("block_severity")
+    if isinstance(severity, str) and severity.strip().lower() in {"standard", "red_line"}:
+        cfg.block_severity = severity.strip().lower()
     return cfg
 
 
