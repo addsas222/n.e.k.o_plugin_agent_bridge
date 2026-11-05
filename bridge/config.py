@@ -59,6 +59,27 @@ class AgentOverride:
 
 
 @dataclass
+class SentinelConfig:
+    """哨兵（Sentinel，GPL-3.0）安全审计的对接配置。
+
+    哨兵以独立进程（git submodule：vendor/sentinel）形式存在，本插件只通过它的
+    本地 HTTP 接口（默认 127.0.0.1:8787）对接。**默认全部关闭**——未启用时
+    派发行为完全不变。详见仓库根 NOTICE 与 README 的「Sentinel 安全审计集成」一节。
+    """
+
+    enabled: bool = False
+    """是否启用哨兵审计。关闭时派发路径零改动。"""
+    url: str = "http://127.0.0.1:8787"
+    """哨兵无头守护进程的地址（只允许本机回环）。"""
+    block_on_deny: bool = True
+    """预检判定为 block 时，是否真的拒绝派发；设为 false 则只记录不拦截。"""
+    attach: bool = True
+    """派发后是否把该路会话挂给哨兵后台静默监控（best-effort，依赖 Agent 产出可读日志）。"""
+    timeout: float = 2.0
+    """单个接口的超时（秒）；守护进程不可达时按 fail-open 处理。"""
+
+
+@dataclass
 class BridgeConfig:
     default_cwd: str = ""
     default_timeout_seconds: int = 600
@@ -68,6 +89,7 @@ class BridgeConfig:
     allow_parallel: bool = True
     max_parallel: int = 4
     agents: dict[str, AgentOverride] = field(default_factory=dict)
+    sentinel: SentinelConfig = field(default_factory=SentinelConfig)
     source_path: str = ""
 
     # ---------------------------------------------------------------- 读取
@@ -162,7 +184,31 @@ def config_from_dict(raw: Any, source_path: str = "") -> BridgeConfig:
             )
             config.agents[str(agent_id)] = override
 
+    # 哨兵安全审计配置：plugin.toml 里是嵌套的 [bridge.sentinel]（→ bridge 子表），
+    # config.json 里也可能直接是顶层 [sentinel]。两边都认。
+    sentinel_raw = raw.get("sentinel")
+    if not isinstance(sentinel_raw, dict):
+        sentinel_raw = (raw.get("bridge") or {}).get("sentinel")
+    if isinstance(sentinel_raw, dict):
+        config.sentinel = _sentinel_from_dict(sentinel_raw)
+
     return config
+
+
+def _sentinel_from_dict(raw: dict[str, Any]) -> SentinelConfig:
+    """从字典构建哨兵配置；任何字段缺失/非法都退回默认值，绝不因配置写坏而崩。"""
+    cfg = SentinelConfig()
+    if isinstance(raw.get("enabled"), bool):
+        cfg.enabled = raw["enabled"]
+    if isinstance(raw.get("url"), str) and raw["url"].strip():
+        cfg.url = raw["url"].strip()
+    if isinstance(raw.get("block_on_deny"), bool):
+        cfg.block_on_deny = raw["block_on_deny"]
+    if isinstance(raw.get("attach"), bool):
+        cfg.attach = raw["attach"]
+    if isinstance(raw.get("timeout"), (int, float)) and float(raw["timeout"]) > 0:
+        cfg.timeout = float(raw["timeout"])
+    return cfg
 
 
 def load_config(explicit_path: str | None = None) -> BridgeConfig:

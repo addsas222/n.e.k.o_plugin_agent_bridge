@@ -66,6 +66,7 @@ except ModuleNotFoundError as exc:
     neko_plugin, plugin_entry, ui = _stub.neko_plugin, _stub.plugin_entry, _stub.ui
 
 try:  # 包上下文（宿主把本仓库挂载成 agent_bridge 包）
+    from .bridge.audit import status_snapshot
     from .bridge.config import BridgeConfig, config_from_dict
     from .bridge.registry import (
         AGENT_SPECS,
@@ -78,6 +79,7 @@ try:  # 包上下文（宿主把本仓库挂载成 agent_bridge 包）
     from .bridge.runner import probe_version, run_agent
     from .bridge.tools import format_agent_result, write_audit
 except ImportError:  # 独立模块（pytest 推导模块名时）—— 兄弟包从仓库根解析
+    from bridge.audit import status_snapshot
     from bridge.config import BridgeConfig, config_from_dict
     from bridge.registry import (
         AGENT_SPECS,
@@ -454,9 +456,9 @@ class AgentBridgePlugin(NekoPluginBase):
     @plugin_entry(
         id="agent_doctor",
         name="诊断桥接链路",
-        description="检查宿主平台、解释器版本、配置来源，以及每个 Agent 的解析与版本情况。",
+        description="检查宿主平台、解释器版本、配置来源、每个 Agent 的解析与版本情况，以及哨兵审计的连通性。",
         timeout=_ENTRY_TIMEOUT,  # 默认 probe_versions=True 会逐个探测全部 CLI，30 秒看门狗不够
-        llm_result_fields=["summary", "agents"],
+        llm_result_fields=["summary", "agents", "sentinel"],
     )
     async def agent_doctor(
         self,
@@ -478,6 +480,20 @@ class AgentBridgePlugin(NekoPluginBase):
         if runtime_path and runtime_path != source_path:
             lines.append(f"运行时覆盖：{runtime_path}")
         lines.append(f"审计日志：{config.audit_log or '（关闭）'}")
+
+        # 哨兵是独立进程，健康检查走本机 HTTP（最多 timeout 秒）。放到线程里，
+        # 别让一次诊断把宿主事件循环卡住。
+        sentinel_info = await asyncio.to_thread(status_snapshot, config.sentinel)
+        if not sentinel_info["enabled"]:
+            lines.append("哨兵：未启用（可选，见 README「Sentinel 安全审计集成」）")
+        elif sentinel_info["reachable"]:
+            lines.append(
+                "哨兵：已连接 {url} · v{version} · 会话 {sessions}（L2 休眠 {l2_sleeping}）".format(
+                    **sentinel_info
+                )
+            )
+        else:
+            lines.append(f"哨兵：已启用但连不上 {sentinel_info['url']}（fail-open，不影响派发）")
 
         # 先并行探测版本号，再拼报告 —— 串行探测 9 个 Agent 最坏 405 秒，
         # 会把入口跑过宿主看门狗（同 agents_list 的处理）。
@@ -522,7 +538,15 @@ class AgentBridgePlugin(NekoPluginBase):
 
         healthy = sum(1 for row in rows if row["mark"] == "OK")
         summary = f"诊断完成：{healthy}/{len(rows)} 个 Agent 标记为 OK"
-        return Ok({"summary": summary, "report": "\n".join(lines), "agents": rows, "healthy": healthy})
+        return Ok(
+            {
+                "summary": summary,
+                "report": "\n".join(lines),
+                "agents": rows,
+                "healthy": healthy,
+                "sentinel": sentinel_info,
+            }
+        )
 
     # ------------------------------------------------------------ 对话期工具
 

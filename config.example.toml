@@ -23,3 +23,24 @@ max_parallel = 4
 # [bridge.agents.dsh]
 # enabled = true
 # timeout_seconds = 900
+
+# ---------------------------------------------------------------------------
+# 哨兵（Sentinel，GPL-3.0）安全审计集成（可选，默认关闭）
+# ---------------------------------------------------------------------------
+# 本插件可对接「哨兵」这个独立的本机安全审计进程（git submodule：vendor/sentinel），
+# 在派发任务前用它的 L1 规则做一次秒级安全预检，命中红线/危险词则拒绝派发；
+# 派发后还可把这一路会话挂给它后台静默监控。
+# 哨兵是**独立进程**，本插件只通过它本机 127.0.0.1 的 HTTP 接口对接，
+# 不引入任何 GPL 源码（详见仓库根 NOTICE）。
+#
+# 启用步骤：
+#   1) 拉起哨兵守护进程：  git submodule update --init vendor/sentinel
+#                          然后 python -m src.daemon.server --port 8787
+#   2) 把下面 enabled 改为 true。
+#
+# [bridge.sentinel]
+# enabled = false
+# url = "http://127.0.0.1:8787"
+# block_on_deny = true      # 预检判定 block 时是否真的拒绝派发（false 则只记录）
+# attach = true             # 进程拉起后是否把会话挂给哨兵后台监控（best-effort）
+# timeout = 2.0             # 单个接口超时（秒）；哨兵未启动按 fail-open 处理

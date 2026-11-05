@@ -1,6 +1,6 @@
 [project]
 name = "agent_bridge"
-version = "0.2.3"
+version = "0.3.0"
 description = "N.E.K.O local coding-agent bridge: dispatch tasks to local coding-agent CLIs as entries and LLM tools; built-in 9 agents plus data-driven providers/ for the rest"
 requires-python = ">=3.11"
 # 纯标准库 + 宿主自带 SDK；无第三方依赖。
@@ -19,6 +19,8 @@ filterwarnings = [
 ]
 
 asyncio_mode = "auto"
+# pytest-asyncio 1.x 要求显式声明异步 fixture 的事件循环作用域，否则会发弃用警告。
+asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
 
 # 用 importlib 模式按文件路径导入测试模块。

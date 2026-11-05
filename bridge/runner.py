@@ -25,8 +25,9 @@ import threading
 import time
 from dataclasses import dataclass, field
 from functools import lru_cache
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
+from .audit import build_client, gated_pre_check
 from .config import BridgeConfig, normalize_path
 from .registry import (
     CMD_FALLBACK,
@@ -43,6 +44,7 @@ _NOISE_PREFIXES = ("(node:", "node:", "npm ", "warning:", "experimentalwarning")
 
 _IS_WINDOWS = sys.platform == "win32"
 _READ_CHUNK = 65536
+logger = logging.getLogger(__name__)
 
 _ENV_STRIP = (
     "PYTHONHOME",
@@ -223,6 +225,10 @@ class AgentResult:
     error: str = ""
     needs_login: bool = False
     """CLI 因为没登录而拒绝执行（``error`` 以 ``AGENT_NEEDS_LOGIN:`` 开头）。"""
+    pid: int | None = None
+    """被派发子进程的 PID（哨兵挂载用；拿不到就是 ``None``）。"""
+    blocked_by_sentinel: bool = False
+    """任务被哨兵 L1 预检拦下（``error`` 以 ``AGENT_BLOCKED_BY_SENTINEL:`` 开头）。"""
     extra: dict[str, object] = field(default_factory=dict)
 
     @property
@@ -323,8 +329,9 @@ def _execute_blocking(
     output_limit: int,
     env: dict[str, str],
     stream_grace: float,
-) -> tuple[int | None, str, str, bool, bool, str]:
-    """同步跑一条命令。返回 (exit_code, stdout, stderr, 超时, 输出截断, 错误)。
+    on_spawn: Callable[[int], None] | None = None,
+) -> tuple[int | None, str, str, bool, bool, str, int | None]:
+    """同步跑一条命令。返回 (exit_code, stdout, stderr, 超时, 输出截断, 错误, pid)。
 
     **为什么这里刻意用阻塞式 subprocess 而不是 asyncio 的子进程**：
 
@@ -370,7 +377,17 @@ def _execute_blocking(
     try:
         process = subprocess.Popen(argv, **kwargs)
     except (OSError, ValueError) as exc:
-        return None, "", "", False, False, f"无法启动进程：{exc}"
+        # 注意返回值必须是完整的 7 元组：少一个 pid 会在解包处直接 ValueError，
+        # 把「启动失败」变成「派发层炸了」，错误信息全丢。
+        return None, "", "", False, False, f"无法启动进程：{exc}", None
+
+    # 进程一拉起来就通知观察者（哨兵挂接靠它拿 pid）。钩子必须**瞬时返回**：
+    # 这里还在读管道的关键路径上，任何阻塞都会拖慢输出收集。
+    if on_spawn is not None:
+        try:
+            on_spawn(process.pid)
+        except Exception as exc:  # noqa: BLE001 —— 观察钩子失败不得影响派发
+            logger.warning("派发后置钩子失败（已忽略）：%s: %s", type(exc).__name__, exc)
 
     assert process.stdout is not None and process.stderr is not None
     out_reader = _PipeReader(process.stdout, output_limit)
@@ -410,7 +427,7 @@ def _execute_blocking(
         if reader.is_alive():
             _close_in_background(pipe)
 
-    return process.returncode, stdout_text, stderr_text, timed_out, truncated, error
+    return process.returncode, stdout_text, stderr_text, timed_out, truncated, error, process.pid
 
 
 async def _execute(
@@ -421,7 +438,8 @@ async def _execute(
     output_limit: int,
     env_overrides: dict[str, str] | None = None,
     stream_grace: float = _STREAM_GRACE,
-) -> tuple[int | None, str, str, bool, bool, str]:
+    on_spawn: Callable[[int], None] | None = None,
+) -> tuple[int | None, str, str, bool, bool, str, int | None]:
     """在线程里跑 _execute_blocking，保持调用方是 async 的。
 
     开销可忽略：真正的工作是子进程在跑，线程只是等它。
@@ -445,7 +463,32 @@ async def _execute(
         output_limit=output_limit,
         env=env,
         stream_grace=stream_grace,
+        on_spawn=on_spawn,
     )
+
+
+_SENTINEL_ATTACH_DELAY = 2.0
+"""进程拉起后延迟多久再挂给哨兵（秒）。
+
+哨兵的 ``/api/attach`` 会按 cwd 扫会话日志，扫不到就起一个**空跟读线程**并立即退出；
+而进程刚起来的那一瞬间日志往往还没落盘。延迟放在后台线程里，既不阻塞管道读取，
+也给 CLI 留出写首行的时间。
+"""
+
+
+def _attach_in_background(client, *, cwd: str, pid: int, agent: str) -> None:
+    """派发成功后把这一路挂给哨兵（best-effort，绝不阻塞/影响派发）。"""
+
+    def _run() -> None:
+        try:
+            time.sleep(_SENTINEL_ATTACH_DELAY)
+            snapshot = client.attach(cwd=cwd or "", pid=pid, agent=agent)
+            if isinstance(snapshot, dict) and not snapshot.get("log_path"):
+                logger.debug("哨兵挂接成功但未找到会话日志（pid=%s, agent=%s）", pid, agent)
+        except Exception as exc:  # noqa: BLE001 —— 监控挂接失败不得影响派发
+            logger.debug("哨兵挂接失败（已忽略）：%s: %s", type(exc).__name__, exc)
+
+    threading.Thread(target=_run, daemon=True, name="sentinel-attach").start()
 
 
 async def run_agent(
@@ -498,15 +541,52 @@ async def run_agent(
         extra_args=effective_extra,
     )
     workdir = config.resolve_cwd(cwd)
+
+    # —— 哨兵 L1 安全预检闸门（对接哨兵 v5 无头守护进程）——
+    # 未启用 / 守护进程没跑 / 降级 → 一律 fail-open（放行），派发行为完全不变。
+    # 预检是同步 HTTP，扔线程里跑：2 秒超时不该把宿主的事件循环一起卡住。
+    block = await asyncio.to_thread(gated_pre_check, config.sentinel, task)
+    if block is not None:
+        preview = " ".join(redact_argv(argv, task))
+        hint = f"（rule_id={block.rule_id}）" if block.rule_id else ""
+        return AgentResult(
+            agent=spec.id,
+            label=spec.label,
+            exit_code=None,
+            stdout="",
+            stderr="",
+            duration_ms=0,
+            command_preview=preview,
+            error=(
+                f"AGENT_BLOCKED_BY_SENTINEL: 任务被哨兵 L1 安全预检拦下"
+                f"{hint}：{block.reason}".rstrip()
+            ),
+            blocked_by_sentinel=True,
+            extra={
+                "rule_id": block.rule_id,
+                "reason": block.reason,
+                "evidence": block.evidence,
+            },
+        )
+
     preview = " ".join(redact_argv(argv, task))
 
+    # 哨兵挂接要在**进程刚起来**时拿到 pid；等 _execute 返回时进程已经退出，
+    # 再 attach 只能挂到一具尸体上（这也是上一版最实质的缺陷）。
+    attach_client = build_client(config.sentinel) if config.sentinel.attach else None
+
+    def _attach_on_spawn(pid: int) -> None:
+        if attach_client is not None:
+            _attach_in_background(attach_client, cwd=workdir or "", pid=pid, agent=spec.id)
+
     started = time.monotonic()
-    exit_code, stdout, stderr, timed_out, truncated, error = await _execute(
+    exit_code, stdout, stderr, timed_out, truncated, error, pid = await _execute(
         argv,
         cwd=workdir,
         timeout=seconds,
         output_limit=config.max_output_bytes,
         env_overrides=override.env or None,
+        on_spawn=_attach_on_spawn if attach_client is not None else None,
     )
     duration_ms = int((time.monotonic() - started) * 1000)
 
@@ -544,6 +624,7 @@ async def run_agent(
         command_preview=preview,
         error=error,
         needs_login=needs_login,
+        pid=pid,
         extra=extra,
     )
 
@@ -562,7 +643,7 @@ async def probe_version(
     去掉子命令后直接问 CLI 才拿得到真版本（sibling skill neko.py 里同样的兜底）。
     """
     override = config.override_for(spec.id)
-    exit_code, stdout, stderr, timed_out, _, _ = await _execute(
+    exit_code, stdout, stderr, timed_out, _, _, _ = await _execute(
         build_version_argv(spec, resolved),
         cwd=None,
         timeout=timeout,
@@ -580,7 +661,7 @@ async def probe_version(
             return f"<无输出 rc={exit_code}>"
         return _pick_version_line(text)[:120]
 
-    _, retry_out, retry_err, retry_timed_out, _, _ = await _execute(
+    _, retry_out, retry_err, retry_timed_out, _, _, _ = await _execute(
         build_version_argv(spec, resolved, with_fixed_args=False),
         cwd=None,
         timeout=timeout,

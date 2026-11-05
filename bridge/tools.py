@@ -32,7 +32,9 @@ def _fence(text: str) -> str:
 
 
 def format_agent_result(result: AgentResult) -> str:
-    if result.needs_login:
+    if result.blocked_by_sentinel:
+        status = "SENTINEL_BLOCK"
+    elif result.needs_login:
         status = "NEEDS_LOGIN"
     elif result.ok:
         status = "OK"
@@ -41,6 +43,9 @@ def format_agent_result(result: AgentResult) -> str:
     lines = [
         f"[agent_run] {result.agent} · {status} · exit={result.exit_code} · {result.duration_ms / 1000:.1f}s",
     ]
+    if result.blocked_by_sentinel:
+        # 任务根本没交给 Agent：直接点名「被哨兵拦下」，别让模型以为 Agent 干过。
+        lines.append("note: 任务未执行——被哨兵（Sentinel）L1 安全预检拦下。改述任务或检查哨兵规则后重试。")
     if result.needs_login:
         # 别把那句登录提示留在 body 里让模型自己品：直接点名「换个已登录的 Agent」。
         lines.append("note: 该 CLI 未登录，任务根本没有执行；换一个 ready 的 Agent 重试。")
