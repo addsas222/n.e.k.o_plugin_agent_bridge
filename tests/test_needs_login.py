@@ -21,7 +21,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from bridge.config import BridgeConfig
 from bridge.registry import AGENT_SPECS, ResolvedCommand
-from bridge.runner import _detect_auth_failure, run_agent
+from bridge.runner import _detect_auth_failure, _has_substantive_output, run_agent
 from bridge.tools import format_agent_result
 
 REAL_STDERR = (
@@ -158,3 +158,47 @@ async def test_live_codebuddy_needs_login():
     text = format_agent_result(result)
     assert "NEEDS_LOGIN" in text
     assert "换一个 ready 的 Agent" in text
+
+
+#: 判据规格表：(stdout, 是否算「有实质产出」)。
+#:
+#: 这张表就是 ``_has_substantive_output`` 的**规格**。判据是形态而不是长度，所以每一条
+#: 都必须能说出「为什么这一行是/不是产出」，而不是「它有多少字符」。
+_SUBSTANTIVE_SPEC: list[tuple[str, bool]] = [
+    # —— 算产出：真实结论，外形各不相同 ——
+    ("int main(){return 0;}", True),             # 19 字符的完整答案：短 ≠ 没干活
+    ("compilation finished with 0 errors", True),
+    ("我已经把 README 里的拼写问题列出来了，共 3 处，见上面的清单。", True),
+    ("done", True),                               # 单个短词：判不准时偏向「有产出」
+    ("ok", True),
+    ("42 passed", True),
+    ("编译失败：3 个 error，2 个 warning", True),  # 提到 warning 的结论仍是结论
+    ("npm install 完成，添加 3 个包", True),       # 以 npm 开头 ≠ npm 自己的告警
+    ("npm ERR! code E404", True),                  # npm 的**真错误**是结论，不是横幅
+    # —— 不算产出：空、纯进度形态、整行就是告警 ——
+    ("", False),
+    ("   ", False),
+    ("Thinking…", False),                         # 省略号收尾
+    ("reading src/app.py now", False),            # 动名词开头
+    ("working…", False),
+    ("● Read(src/app.py)", False),                # 工具标记前缀
+    ("WARNING: PowerShell profile failed to load", False),  # 整行就是告警横幅
+    ("(node:1234) Warning: experimental loader", False),
+    # Node 实际打的是 ExperimentalWarning：按 warning 起头会漏掉，噪声表就形同虚设
+    ("(node:1234) ExperimentalWarning: stream/web is an experimental feature", False),
+    # npm 的样板尾部：每一次 npm 失败都有这一行，放它算产出则登录判定永远触发不了
+    ("npm ERR! A complete log of this run can be found in:", False),
+    ("npm ERR!     at Object.<anonymous> (x.js:1)", False),  # 栈帧
+    ("at foo (bar.js:12)", False),                # 栈帧
+]
+
+
+@pytest.mark.parametrize("stdout,expected", _SUBSTANTIVE_SPEC)
+def test_substantive_output_spec(stdout: str, expected: bool):
+    """把「什么算产出」钉成逐条命名的规格，而不是一个阈值数字。
+
+    为什么值得为十几行字符串写十几条用例：这条判据一旦判错，正常 Agent 会被记进
+    ``_needs_login``，而那个名单**只能靠重载插件解除** —— 代价远大于多一个测试。
+    单条名字（``test_substantive_output_spec[done-True]``）也让失败时不用再猜是哪一行。
+    """
+    assert _has_substantive_output(stdout) is expected
