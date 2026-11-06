@@ -42,3 +42,20 @@ max_parallel = 4
 # block_severity = "standard"  # standard（含可恢复高危）| red_line（只拦不可逆）
 # attach = true                # 派发后是否把会话登记给审计层（best-effort）
 # timeout = 2.0                # HTTP 后端的单次超时（秒）
+#
+# 以下能力默认全关 —— 开启才有额外开销（存储、模型调用、网络、进程干预）：
+# store_path = ""              # 事件账本（SQLite）路径；留空放插件 data 目录
+# retention_days = 30          # 账本保留天数，超期记录在启动时清理
+# l2_enabled = false           # L2 语义判定（意图漂移）：要调模型、按 token 计费
+# l2_min_interval = 20.0       # 两次 L2 判定的最小间隔（秒），防逐行触发烧穿
+# l2_window = 10               # 每次判定只喂最近多少个动作
+# l2_max_calls_per_hour = 120  # 每小时 L2 调用硬上限
+# guard_action = "alert"       # alert（只告警）| terminate（终止进程树）
+#                              # 终止不可逆，所以默认只告警，由人显式开启
+#                              # 没有 suspend：挂起需要「恢复」那一半，而插件没有
+#                              # 暂停等人确认的入口，缺了恢复就会冻到任务超时
+# safepoint = false            # 派发前在 git 工作区打安全点（git stash create，不动工作区）
+#                              # 每次约 0.9s（Windows 冷启更久），且会在目标仓库留一个
+#                              # refs/sentinel/sp-*；对不可信仓库务必保持关闭
+# webhook_url = ""             # 告警 webhook（仅 http/https）；留空只走本地通道
+# timebox_seconds = 0          # 单个任务的时间盒上限（秒）；0 = 关闭

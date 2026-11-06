@@ -9,6 +9,12 @@ dist/
 build/
 *.egg-info/
 store.db
+# 哨兵账本：默认落在「当前工作目录」，在仓库里跑过测试或直接派发就会生成。
+# 里面存**命令原文与 Agent 输出**，绝不能被提交。
+sentinel.db
+sentinel.db-journal
+sentinel.db-wal
+sentinel.db-shm
 .env
 .DS_Store
 
@@ -22,6 +28,12 @@ static/cache/
 
 # --- pytest tmp_path 残留目录 ----------------------------------------------
 pytest-cache-files-*/
+# `--basetemp=.pytest-tmp` 会让 pytest 的临时目录落进仓库，而 tmp_path 里既有测试账本
+# （`t.db` / `dbPath`，**不是** `sentinel.db`，上面那条忽略规则匹配不到）也有测试自己造的
+# 嵌套 `.git`。一次 `git add -A` 就会带进来一百多个文件，还会把嵌套仓库记成 gitlink。
+# 这是**仓库内** basetemp 的兜底，规范跑法仍应指到仓库外：
+# `--basetemp="$TEMP/neko-def-<ts>"`（见 README「测试」）。
+.pytest-tmp/
 
 # --- 只读清点的产物：含本机路径与软件清单，不入公共仓库 --------------------
 # 需要时本地跑 tools/inventory.py 重新生成。

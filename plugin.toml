@@ -4,7 +4,7 @@ name = "本机 Agent 桥接"
 description = "把本机的编码 Agent CLI 桥接成 N.E.K.O 的运行时入口，并注册为对话期 LLM 工具，让猫娘在聊天里就能直接派活给它们。内置 9 个（CodeBuddy / Claude Code / dsh / omp / EvoX / OpenCode / OpenClaw / AtomCode / QwenPaw），其余通过 providers/<id>/provider.toml 动态登记（本仓库自带 Gemini CLI / Command Code / pi / Hermes / StepCode），新增只需放一个目录、不改代码。 反方向见 skill/neko-bridge：把 N.E.K.O. 做成可移植 skill 装到这些 Agent 里，让它们能反过来调用 N.E.K.O.。"
 short_description = "Bridge local coding-agent CLIs into N.E.K.O as entries and LLM tools; built-in 9 agents plus data-driven providers/ for the rest."
 keywords = ["agent", "代理", "编码", "代码", "codebuddy", "claude", "dsh", "omp", "evox", "opencode", "openclaw", "atomcode", "qwenpaw", "gemini", "command-code", "cmdc", "pi", "CLI", "命令行", "派发", "跑一下", "写个脚本", "改代码", "provider", "路由"]
-version = "0.4.0"
+version = "0.5.0"
 entry = "plugin.plugins.agent_bridge:AgentBridgePlugin"
 
 [plugin.author]
@@ -34,6 +34,31 @@ name = "并行派发多个任务"
 [[plugin.entries]]
 id = "agent_doctor"
 name = "诊断桥接链路"
+
+[[plugin.entries]]
+id = "sentinel_status"
+name = "哨兵状态"
+
+[[plugin.entries]]
+id = "sentinel_timeline"
+name = "案发时间线"
+
+[[plugin.entries]]
+id = "sentinel_briefing"
+name = "夜间值守晨报"
+
+[[plugin.entries]]
+id = "sentinel_rollback"
+name = "回滚到安全点"
+
+# 模型槽位：L2 语义判定通过宿主网关调用，`model="judge"` 指的就是下面这个 usage id。
+# 没声明 → 403 model_usage_not_declared；声明了但用户没绑 → 403 model_usage_not_bound。
+# 两种都由 SemanticJudge 降级处理（L1 照常），不会让派发出错。
+# 用不到 L2 就别开 l2_enabled，这个槽位可以一直留着不绑。
+[plugin.models.judge]
+usage = "judge"
+capability = "chat"
+description = "哨兵 L2 语义判定：判断 Agent 的动作是否偏离了最初目标。"
 
 [plugin_runtime]
 enabled = true
@@ -77,7 +102,7 @@ max_parallel = 4
 # enabled = false
 
 # ---------------------------------------------------------------------------
-# 安全审计（L1 派发前预检）—— 内置后端，MIT，纯标准库，默认关闭。
+# 安全审计（内置，可选）—— MIT，纯标准库，默认关闭。
 # enabled = true 即用：在同一进程内判定，不需要起服务、不需要额外进程。
 # 想对接外部完整版 Sentinel 时再设 backend = "http" 并给出 url。
 # [bridge.sentinel]
@@ -88,6 +113,22 @@ max_parallel = 4
 # block_severity = "standard" # standard（含可恢复高危）| red_line（只拦不可逆）
 # attach = true              # 派发后是否把会话登记给审计层（best-effort）
 # timeout = 2.0              # HTTP 后端的单次超时（秒）
+#
+# 以下能力默认全关 —— 开启才有额外开销（存储、模型调用、网络、进程干预）：
+# store_path = ""              # 事件账本（SQLite）路径；留空放插件 data 目录
+# retention_days = 30          # 账本保留天数
+# l2_enabled = false           # L2 语义判定（意图漂移）：要调模型、按 token 计费
+# l2_min_interval = 20.0       # 两次 L2 判定的最小间隔（秒）
+# l2_window = 10               # 每次判定只喂最近多少个动作
+# l2_max_calls_per_hour = 120  # 每小时 L2 调用硬上限
+# guard_action = "alert"       # alert（只告警）| terminate（终止进程树）
+#                              # 没有 suspend：挂起需要「恢复」那一半，而插件没有
+#                              # 暂停等人确认的入口，实际会冻到任务超时，见 README
+# safepoint = false            # 派发前打安全点（git stash create，不动工作区）
+#                              # 每次约 0.9s（Windows 冷启更久），且会在目标仓库留
+#                              # 一个 refs/sentinel/sp-*；对不可信仓库务必保持关闭
+# webhook_url = ""             # 告警 webhook（仅 http/https）；留空只走本地通道
+# timebox_seconds = 0          # 单个任务的时间盒上限（秒）；0 = 关闭
 
 [plugin.ui]
 enabled = true

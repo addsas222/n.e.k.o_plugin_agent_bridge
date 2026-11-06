@@ -3,28 +3,57 @@ agent_bridge · 第三方组件与许可声明（NOTICE）
 
 本仓库（addsas222/n.e.k.o_plugin_agent_bridge）随 N.E.K.O 项目采用 MIT 协议
 （见 N.E.K.O 项目仓库根的 LICENSE 文件）。本仓库包含的全部源码——包括
-`bridge/sentinel_core/` 这份安全审计实现——均在此 MIT 协议之下。
+`bridge/sentinel_core/` 这套内置安全审计实现——均在此 MIT 协议之下。
+
+第三方组件
+----------
+**无。** 本仓库不包含任何第三方源文件，也不依赖任何第三方包：
+`pyproject.toml` 的 `dependencies` 为空，`bridge/sentinel_core/` 全部模块
+只导入 Python 标准库（`sqlite3`、`subprocess`、`threading`、`queue`、
+`json`、`urllib`、`http.server` 等）。宿主的 N.E.K.O 插件 SDK 由宿主提供，
+不随本仓库分发。
 
 安全审计模块（bridge/sentinel_core）的来源说明
 ----------------------------------------------
-`bridge/sentinel_core` 是**重新编写的实现**：不含任何第三方源文件，不依赖任何
-第三方包（纯 Python 标准库）。
+`bridge/sentinel_core` 是**从头编写的实现**，落盘于 2026-11。它参考了开源
+项目 `silverwolftyro/sentinel`（GPL-3.0）在**功能规格**层面公开的事实，
+具体只有三类：
 
-它的设计目标参考了开源项目 `silverwolftyro/sentinel`（GPL-3.0）所定义的
-**HTTP 接口形态**与**威胁类别划分**这两个公开层面的事实：
+* **接口形态**：`GET /api/health`、`POST /api/pre-check`、`POST /api/attach`、
+  `GET /api/state` 四个端点的语义（本仓库仅在选择外部后端模式时复用这套
+  形状，见 `bridge/audit.py` 的 `SentinelClient`）；
+* **威胁类别划分**：删根、抹盘、下载即执行、批量删除这类「一旦执行就回不来」
+  的操作需要被单独标为红线级；
+* **能力清单**：语义判定、守护者干预、安全点回滚、告警通道、晨报、时间线、
+  Token 审计、时间盒这几项要解决的问题本身。
 
-* 接口形态：`GET /api/health`、`POST /api/pre-check`、`POST /api/attach`、
-  `GET /api/state` 四个端点的语义；
-* 威胁类别：删根、抹盘、下载即执行、批量删除这类「一旦执行就回不来」的操作
-  需要被单独标为红线级。
+以上属于**接口与功能规格**，不构成对原项目表达形式的复制。以下实现细节均为
+本仓库自行设计并编写，未复制原项目代码：
 
-这两项都属于**接口与功能规格**，不构成对原项目表达形式的复制。规则的匹配
-表达式、命令解析器、会话模型、服务端实现均为本仓库自行编写，未复制原项目
-代码。因此本模块不受 GPL-3.0 约束，与本仓库其余部分同为 MIT。
+| 能力 | 本仓库的独立实现方式 |
+|------|----------------------|
+| 事件账本 | SQLite（WAL + 每线程连接 + `busy_timeout`），表结构与索引自行设计 |
+| L1 规则预检 | 自建规则表与匹配表达式，判定值常量为本仓库自定 |
+| L2 语义判定 | 复用宿主模型网关，三道成本闸门（最小间隔 / 滑动窗口 / 每小时上限）由本仓库设计 |
+| 进程干预 | 跨平台：POSIX 用 `SIGSTOP`/`SIGCONT`，Windows 用 `OpenProcess` + `NtSuspendProcess` 系动态解析；**不采用** `os.kill(pid, 0)` 探活（Windows 上会终止进程） |
+| 安全点回滚 | 基于 `git stash create`（不改工作区、不动 stash 列表），恢复走 apply → 退回 HEAD 再 apply → 按 tree 覆盖 三档递进 |
+| 输出流解析 | 见下节「transcript 格式」 |
+| 告警通道 / 晨报 / 时间线 / Token 审计 / 时间盒 | 全部自写 |
 
-> 若你希望使用完整版 Sentinel（含 GUI、进程树扫描、多模型语义判定），请自行
-> 从上游获取并遵守其 GPL-3.0 许可。本插件可以通过 `backend = "http"` 与一个
-> 独立运行的上游守护进程对接，但**默认不依赖它**。
+### transcript 格式
+
+`bridge/sentinel_core/adapters/` 里对各 CLI 输出格式的解析规则，**不是**从
+上游项目抄来的，而是在本机对真实 transcript / rollout 文件逐字段实测得出
+（例如 codex 对同一动作会发两遍——`response_item` 是意图、`event_msg` 是
+回执——因此只读前者）。这类格式本身是相关 CLI 的对外数据格式，不属于任何
+一方的表达形式。
+
+因此本模块不受 GPL-3.0 约束，与本仓库其余部分同为 MIT。
+
+> 若你希望使用完整版 Sentinel（含 GUI 桌面外壳、进程树全盘扫描、多级模型
+> 路由、单文件 exe 打包），请自行从上游获取并遵守其 GPL-3.0 许可。本插件可以
+> 通过 `backend = "http"` 与一个独立运行的上游守护进程对接，但**默认不依赖
+> 它**，两者之间没有代码关系。
 
 为什么不再使用子模块
 --------------------
@@ -39,4 +68,4 @@ agent_bridge · 第三方组件与许可声明（NOTICE）
 避坑经验参考了本插件（agent_bridge，MIT）的部分代码。本插件当前的审计模块是
 在**功能层面**与哨兵对齐的独立实现。两仓库的许可证各自独立、互不改变。
 
-启用方式见 README 的「安全审计集成」一节。
+启用方式见 README 的「安全审计集成（内置，可选）」一节。

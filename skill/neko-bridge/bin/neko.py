@@ -30,6 +30,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import socket
 import sys
 import time
@@ -290,6 +291,48 @@ _AUTH_GENERIC: tuple[str, ...] = (
 #: 子进程里必须清掉的环境变量：N.E.K.O. 用嵌入式 Python，PYTHONHOME/PYTHONPATH 会指向
 #: 宿主自己的 bin，导致 Python 实现的 Agent（如 qwenpaw）直接起不来。
 ENV_STRIP = ("PYTHONHOME", "PYTHONPATH", "PYTHONSTARTUP")
+
+#: 与 ``agent_bridge/bridge/runner.py`` 的 ``_PROGRESS_MAX_CHARS`` /
+#: ``_PROGRESS_LINE_RE`` / ``_looks_like_progress`` / ``_has_substantive_output``
+#: **必须逐字一致**：两条路径（插件内派发 vs 本 skill 直连）给不同答案，比两条都错
+#: 更难查 —— 用户会看到「同一句话在这边能跑、那边说没登录」。
+#: **这两处必须同步改。**
+_PROGRESS_MAX_CHARS = 60
+
+#: 「像进度提示」的行形态。判据是形态而非累计长度，理由见 ``_has_substantive_output``。
+#: 只收能认出来的形态；判不准时偏向「有产出」（另一侧会把 Agent 拉进 needs_login）。
+_PROGRESS_LINE_RE = re.compile(
+    r"(?:\.{3,}|…)\s*$"
+    r"|^(?:thinking|reading|writing|editing|searching|analy[sz]ing|planning"
+    r"|generating|loading|fetching|running|checking|building|compiling"
+    r"|installing|waiting|starting|processing|scanning|reviewing|applying)\b"
+    r"|^[●⏺•·$>✦✻✽|]\s*",
+    re.IGNORECASE,
+)
+
+#: ANSI 转义序列。判形态之前必须剥掉，否则「\x1b[2mThinking…」的尾字符不是省略号、
+#: 前缀也不是符号 —— 一条彩色进度提示会被当成正文。
+_ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
+
+#: 与 runner.py 相同的噪声判据：**整行形态**是告警才算噪声。
+#: 不用「以某词开头」的前缀表 —— 那会把 ``npm install 完成，添加 3 个包``（真实结论）
+#: 一并丢掉；丢掉唯一一行就变成「没干活」。
+#: npm 的 ``ERR!`` 分两档：样板尾部 / 栈帧 / errno 归噪声，``code E404`` 算产出。
+#: 整片归噪声会误杀真错误，整片算产出会让样板行为每次 npm 失败兜底（详见 runner.py）。
+_NOISE_RE = re.compile(
+    r"^\(?node:\d+\)?\s*(?:\w*warning|deprecat)"
+    r"|^experimentalwarning"
+    r"|^warning:"
+    r"|^warning$"
+    r"|^npm\s+warn"
+    r"|^npm\s+(?:ERR!|error)\s+(?:A complete log of this run|errno|at\s)",
+    re.IGNORECASE,
+)
+
+
+def _is_noise(line: str) -> bool:
+    """这一行本身是不是启动期噪声（Node/npm 告警横幅之类）。"""
+    return bool(_NOISE_RE.match(line.strip()))
 
 
 def canonical_agent(name: str) -> str:
@@ -595,6 +638,47 @@ def agent_report(spec_id: str, *, want_version: bool, fresh: bool = False) -> di
     return report
 
 
+def _looks_like_progress(line: str) -> bool:
+    """这一行是否只是进度/状态提示，而不是任务结果。
+
+    :param line: 已 strip 的单个非空行。
+    :return: 像进度提示为 ``True``。
+    """
+    if len(line) > _PROGRESS_MAX_CHARS:
+        # 进度提示不会写成一句 60 字的话；长句一律当正文，宁可漏报登录。
+        return False
+    return bool(_PROGRESS_LINE_RE.search(line))
+
+
+def _has_substantive_output(stdout: str) -> bool:
+    """stdout 里是否有「像任务结果」的内容。
+
+    判据是**行的形态**，不是总长度：只要有一行不像进度提示，就说明这次真的产出了
+    东西。长度只在单行内做辅助判断（见 ``_PROGRESS_MAX_CHARS``）。
+
+    为什么不能用累计总长：``int main(){return 0;}`` 是 19 个字符的完整答案，
+    ``Thinking…`` 是 9 个字符的进度提示 —— **两者都短**。累计阈值调高了，短答案被
+    判成「没干活」，该 Agent 会被拉进 needs_login 名单；调低了，进度提示被当成产出，
+    未登录被报成成功。形态判据不必在这两种错误里选。
+
+    :param stdout: 子进程的 stdout 全文。
+    :return: 有实质产出为真。
+    """
+    for line in _ANSI_RE.sub("", stdout or "").splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        lowered = stripped.lower()
+        if _is_noise(stripped):
+            continue
+        if lowered.startswith("at "):
+            # 栈帧行是运行时噪声，不是结论（与 runner.py 同一处判据，必须同步）。
+            continue
+        if not _looks_like_progress(stripped):
+            return True
+    return False
+
+
 def detect_needs_login(spec_id: str, stdout: str, stderr: str) -> str:
     """判断这次派发是不是「CLI 没登录、任务根本没跑」，返回提示首行（否则空串）。
 
@@ -605,10 +689,13 @@ def detect_needs_login(spec_id: str, stdout: str, stderr: str) -> str:
     三条判据缺一不可：
     1. stderr 足够短（真跑完任务时不会只有一行）；
     2. 开头命中全局特征或该 Agent 自己声明的 ``auth_patterns``；
-    3. stdout 没有实质内容（只有警告/空行不算）。
+    3. stdout 没有实质内容（只有警告/空行/零星进度提示不算，判据见
+       ``_has_substantive_output``）。
 
     与上游 ``agent_bridge/bridge/runner.py::_detect_auth_failure`` 同一套逻辑，
-    区别是这里的特征表额外收 provider 清单里的 ``auth_patterns``。
+    区别是这里的特征表额外收 provider 清单里的 ``auth_patterns``。**两份实现必须
+    对同一场景给出同一答案**（``tests/test_runner_stream.py`` 里有对照用例同时钉
+    两边），因为 neko.py 是独立分发的单文件、不能 import ``bridge/``，没法合并。
     """
     import re as _re
 
@@ -629,8 +716,7 @@ def detect_needs_login(spec_id: str, stdout: str, stderr: str) -> str:
     else:
         return ""
 
-    substantive = [line for line in (stdout or "").splitlines() if len(line.strip()) >= 8]
-    if substantive:
+    if _has_substantive_output(stdout):
         return ""
     return next((line.strip() for line in text.splitlines() if line.strip()), head[:120])
 

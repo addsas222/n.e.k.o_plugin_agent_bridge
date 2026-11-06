@@ -40,11 +40,66 @@ from .registry import (
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 _VERSION_RE = re.compile(r"\d+\.\d+")
-_NOISE_PREFIXES = ("(node:", "node:", "npm ", "warning:", "experimentalwarning")
+_NOISE_RE = re.compile(
+    # Node 横幅：``Warning`` / ``ExperimentalWarning`` / ``DeprecationWarning``。
+    # 必须用 ``\w*warning`` 而不是 ``warning``：Node 打印的是
+    # ``(node:1234) ExperimentalWarning: ...``，按 ``warning`` 起头匹配会漏掉 ——
+    # 漏在**安全侧**（这行算产出，于是不判未登录），但噪声表就形同虚设了。
+    r"^\(?node:\d+\)?\s*(?:\w*warning|deprecat)"
+    r"|^experimentalwarning"                    # 无 node 前缀的同名横幅
+    r"|^warning:"                               # 独立的 warning 横幅
+    r"|^warning$"
+    r"|^npm\s+warn"                             # npm 告警（deprecated / peer 之类）
+    # npm 的**样板尾部**与栈帧。这一条必须留着：``npm ERR! A complete log of this run
+    # can be found in:`` 是每次 npm 失败的最后一行，放它算产出，就等于「凡是经 npm
+    # 起手的失败都有产出」，于是「CLI 未登录 → npm 随之报错」永远判不出登录。
+    r"|^npm\s+(?:ERR!|error)\s+(?:A complete log of this run|errno|at\s)",
+    re.IGNORECASE,
+)
+"""启动期噪声行的**完整形态**（Node/npm 的告警横幅之类）。
+
+刻意不用「以某词开头」的前缀表：原表里有 ``"npm "`` 和 ``"node:"``，于是
+``npm install 完成，添加 3 个包``（真实结论）被当成噪声丢掉。丢掉唯一一行就等于判定
+「这次没干活」—— 误报未登录，那个 Agent 会被拉进 ``_needs_login``，重载插件前完全
+不可用。
+
+判据只能是「这行**本身**是警告」，不能是「这行以某个词开头」，更不能是「这行提到了
+那些词」（后者连 ``编译失败：3 个 error，2 个 warning`` 也会被吃掉）。
+
+**npm 的 ``ERR!`` 要分两档，不能整片归一类。** 整片算噪声（旧写法 ``err!``）会让
+``npm ERR! code E404`` 这种**真错误**被判成「没干活」；整片算产出则让
+``A complete log of this run...`` 这种样板行替每一次 npm 失败兜底。所以只把
+**样板尾部 / 栈帧 / errno 行**归噪声，``code E404`` 这类结论行算产出 —— 与
+``_has_substantive_output`` 那条「判不准时偏向有产出」同向。
+"""
+
+
+def _is_noise(line: str) -> bool:
+    """这一行本身是不是启动期噪声（已 strip 的单行）。
+
+    :param line: 单个非空行（可含首尾空白，内部自行处理）。
+    :return: 是噪声为 ``True``。
+    """
+    return bool(_NOISE_RE.match(line.strip()))
 
 _IS_WINDOWS = sys.platform == "win32"
 _READ_CHUNK = 65536
 logger = logging.getLogger(__name__)
+
+#: 哨兵运行时（由插件 startup 注入；未注入时为 ``None``，派发行为完全不变）。
+#: 为什么用模块级而不是函数参数：``run_agent`` 有多个调用点（对话入口、并行派发、
+#: 测试），加参数会把签名扩散到每一条路径；而运行时的语义本来就是进程级单例。
+_sentinel_runtime: Any = None
+
+
+def set_sentinel_runtime(runtime: Any) -> None:
+    """注入哨兵运行时。
+
+    :param runtime: ``SentinelRuntime`` 实例；传 ``None`` 表示卸载（关闭审计）。
+    """
+    global _sentinel_runtime
+    _sentinel_runtime = runtime
+
 
 _ENV_STRIP = (
     "PYTHONHOME",
@@ -75,6 +130,38 @@ _AUTH_MAX_CHARS = 800
 """只有「短输出」才可能是登录提示。
 
 真跑完的 Agent 一定会把结果写进 stdout，见 ``_detect_auth_failure``。"""
+
+_PROGRESS_MAX_CHARS = 60
+"""单行超过这个长度，就不再按「进度提示」处理。
+
+进度提示是「一行几个字的动态」（``Thinking…``、``reading src/app.py``），不会写成
+一句 60 字的话；而真实结论常常正好是一句话。所以长度判据必须落在**单行**上。
+
+为什么不能落在累计总长上：``int main(){return 0;}`` 是 19 个字符的完整答案，
+``Thinking…`` 是 9 个字符的进度提示 —— **两者都短**。任何单一累计阈值都必然在
+某一侧出错：调高了，短答案被判成「没干活」（误报登录，且该 Agent 会被永久拉黑，
+见 ``__init__.py`` 的 ``_needs_login``）；调低了，进度提示被当成产出（漏报登录、
+假成功）。形态判据不需要在这两种错误之间选。
+"""
+
+_PROGRESS_LINE_RE = re.compile(
+    r"(?:\.{3,}|…)\s*$"                                    # 省略号收尾
+    r"|^(?:thinking|reading|writing|editing|searching|analy[sz]ing|planning"
+    r"|generating|loading|fetching|running|checking|building|compiling"
+    r"|installing|waiting|starting|processing|scanning|reviewing|applying)\b"
+    r"|^[●⏺•·$>✦✻✽|]\s*",                                  # 工具调用 / 状态标记前缀
+    re.IGNORECASE,
+)
+"""「像进度提示」的行形态：省略号收尾、动名词开头、工具标记前缀。
+
+只收**能认出来**的形态。曾试过再加一条「单个短词」（`done` / `ok` / `42`）来盖住
+CLI 的状态回显，已撤回：那个边界只反映「里面有没有标点」，`ok` / `PASS` / `LGTM`
+会被判成没干活，而 `Done!` / `v1.2` 能过 —— 它区分的不是「是不是答案」，只是
+「像不像我列的那几个词」。
+
+判不准时一律偏向「有产出」：另一侧的后果是该 Agent 被拉进 `_needs_login`，在重载
+插件前完全不可用（见 ``__init__.py``），代价与「多一句提示」不是一个量级。
+"""
 
 _AUTH_PATTERNS = (
     re.compile(r"authentication\s+required", re.IGNORECASE),
@@ -160,25 +247,49 @@ def _detect_auth_failure(
     误报防护改成两条更准的：
     1. **只看输出开头**（``_AUTH_HEAD_CHARS``）—— 真跑完任务的 Agent 结果在
        stdout 正文里，不会把登录措辞放在最前面；
-    2. **要求 stdout 里没有实质内容** —— stdout 全是噪声行（警告/空行）时仍判，
-       一旦出现非噪声的正文就不再判，这样「让人写登录页」也不会被误伤。
+    2. **要求 stdout 里没有实质内容** —— 噪声行（警告/空行）与进度提示都不算实质
+       产出，判据见 ``_has_substantive_output``：按**行的形态**判断，不看总长度。
+       这样「让人写登录页」不会被误伤，而「未登录时先打一句 Thinking…」也不会把
+       整次判定废掉。
     """
     patterns = _AUTH_PATTERNS + _compile_extra_patterns(extra_patterns)
     return _match_head(stdout, stderr, patterns)
 
 
+def _looks_like_progress(line: str) -> bool:
+    """这一行是否只是进度/状态提示，而不是任务结果。
+
+    :param line: 已 strip 的单个非空行。
+    :return: 像进度提示为 ``True``。
+    """
+    if len(line) > _PROGRESS_MAX_CHARS:
+        # 进度提示不会写成一句 60 字的话；长句一律当正文，宁可漏报登录。
+        return False
+    return bool(_PROGRESS_LINE_RE.search(line))
+
+
 def _has_substantive_output(stdout: str) -> bool:
-    """stdout 里是否有「像任务结果」的内容（滤掉警告、空行、纯符号行）。"""
+    """stdout 里是否有「像任务结果」的内容（滤掉警告、空行、纯符号行）。
+
+    判据是**行的形态**，不是总长度：只要有一行不像进度提示，就说明这次真的产出了
+    东西。长度只在单行内做辅助判断（见 ``_PROGRESS_MAX_CHARS``）。
+
+    为什么不能用累计总长：``int main(){return 0;}`` 是 19 个字符的完整答案，
+    ``Thinking…`` 是 9 个字符的进度提示 —— **两者都短**。累计阈值调高了，短答案被
+    判成「没干活」，该 Agent 会被 `_needs_login` 永久拉黑（只能重载插件解除）；
+    调低了，进度提示被当成产出，未登录被报成成功。形态判据不必在这两种错误里选。
+    """
     for line in strip_ansi(stdout or "").splitlines():
         stripped = line.strip()
         if not stripped:
             continue
         lowered = stripped.lower()
-        if any(lowered.startswith(prefix) for prefix in _NOISE_PREFIXES):
+        if _is_noise(stripped):
             continue
-        if "warning" in lowered or lowered.startswith("at "):
+        if lowered.startswith("at "):
+            # 栈帧行（``at foo (file:12)``）是运行时噪声，不是结论。
             continue
-        if len(stripped) >= 8:
+        if not _looks_like_progress(stripped):
             return True
     return False
 
@@ -197,10 +308,12 @@ def _pick_version_line(text: str) -> str:
     lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
     if not lines:
         return ""
-    # Node 的告警常占好几行，末行形如 "Use `node --trace-warnings ...`"，一并滤掉
+    # Node 的告警常占好几行，末行形如 "Use `node --trace-warnings ...`"，一并滤掉。
+    # 这里保留 ``"warning" in`` 的子串判断（与产出判据不同）：挑版本号时宁可跳过
+    # 一句提到 warning 的行，代价只是版本号显示得朴素一点，不会造成误判。
     candidates = [
         ln for ln in lines
-        if not any(ln.lower().startswith(prefix) for prefix in _NOISE_PREFIXES)
+        if not _is_noise(ln)
         and "warning" not in ln.lower()
     ]
     if not candidates:
@@ -250,12 +363,23 @@ class _PipeReader(threading.Thread):
     2. 读循环不能无条件等 EOF。这些 Agent CLI 会派生 node/bun 孙进程，它们同样继承
        着管道的写端；父进程退出后写端仍未关闭，EOF 永远不来（详见下方 _execute 的说明）。
        所以本线程是 daemon，调用方只给固定宽限期，到点就放弃等待。
+
+    ``on_chunk`` 是给上层做**实时分析**的钩子（把输出流结构化成人能看懂的事件）。
+    两个设计约束都来自上面的第 1 点：**回调抛出的任何异常都必须在这里吞掉**——本线程
+    一死管道就没人在读，缓冲区写满后子进程会永远卡在 write 上；同时回调拿到的是
+    **原始未截断**的块，因为限幅只约束内存、解析需要完整字节。
     """
 
-    def __init__(self, pipe: Any, limit: int) -> None:
+    def __init__(
+        self,
+        pipe: Any,
+        limit: int,
+        on_chunk: Callable[[bytes], None] | None = None,
+    ) -> None:
         super().__init__(daemon=True)
         self.pipe = pipe
         self.limit = limit
+        self.on_chunk = on_chunk
         self.buf = bytearray()
         self.truncated = False
 
@@ -272,9 +396,25 @@ class _PipeReader(threading.Thread):
                         self.truncated = True
                 else:
                     self.truncated = True
+                # 先落缓冲再回调：回调再慢也不该让我们少存数据。
+                self._emit(chunk)
         except (OSError, ValueError):
             # 管道被对端关闭，或调用方为了解除阻塞而 close 了读端
             pass
+
+    def _emit(self, chunk: bytes) -> None:
+        """把一块原始输出交给观察者，**失败只记日志**。
+
+        不能把回调用 try 包进外层：外层的 ``except (OSError, ValueError)`` 只兜管道
+        错误，而观察者（解析器/事件账本）任何异常都会顺着 run() 冒出去杀掉读取线程。
+        那正是本类文档里说的死锁：线程一死→没人读管道→子进程卡死在 write 上。
+        """
+        if self.on_chunk is None:
+            return
+        try:
+            self.on_chunk(chunk)
+        except Exception as exc:  # noqa: BLE001 —— 观察者失败绝不能杀死读取线程
+            logger.debug("输出流回调失败（已忽略，继续读取）：%s: %s", type(exc).__name__, exc)
 
     @property
     def data(self) -> bytes:
@@ -330,8 +470,14 @@ def _execute_blocking(
     env: dict[str, str],
     stream_grace: float,
     on_spawn: Callable[[int], None] | None = None,
+    on_chunk: Callable[[bytes], None] | None = None,
 ) -> tuple[int | None, str, str, bool, bool, str, int | None]:
     """同步跑一条命令。返回 (exit_code, stdout, stderr, 超时, 输出截断, 错误, pid)。
+
+    两个可选钩子，语义不同，别混用：``on_spawn`` 在进程刚起来时给一次 pid（哨兵挂接），
+    ``on_chunk`` 在**每读到一块 stdout** 时给一次原始字节（实时结构化分析）。
+    ``on_chunk`` 只挂 stdout：结构化协议（stream-json / rollout JSONL）都走 stdout，
+    stderr 是诊断噪声，混进来只会让事件流变脏；两路都挂还会让同一条日志出现两次。
 
     **为什么这里刻意用阻塞式 subprocess 而不是 asyncio 的子进程**：
 
@@ -390,7 +536,7 @@ def _execute_blocking(
             logger.warning("派发后置钩子失败（已忽略）：%s: %s", type(exc).__name__, exc)
 
     assert process.stdout is not None and process.stderr is not None
-    out_reader = _PipeReader(process.stdout, output_limit)
+    out_reader = _PipeReader(process.stdout, output_limit, on_chunk)
     err_reader = _PipeReader(process.stderr, output_limit)
     out_reader.start()
     err_reader.start()
@@ -408,14 +554,35 @@ def _execute_blocking(
         except subprocess.TimeoutExpired:
             pass
 
-    # 宽限期是所有读取线程共享的总预算，不是每个各给一份 —— 否则两个管道会把
-    # 等待时间翻倍。正常情况下父进程退出即 EOF，这一步几乎不花时间；只有
-    # 「孙进程握着写端」时才真的等满。
-    deadline = time.monotonic() + stream_grace
+    # 宽限期**每个读线程各给一份**，不复用同一个 deadline。
+    #
+    # 曾经这里是共享的那一份，理由是「否则两个管道会把等待时间翻倍」—— 那个权衡是
+    # 错的：它省下的只是异常路径上的几秒，代价却是把「未登录」判成「成功」。因为
+    # join 按 (stdout, stderr) 顺序进行，stdout 被孙进程握着写端时会吃光整个预算，
+    # 紧接着 err_reader 的 join 因 remaining <= 0 被直接跳过，stderr 拿到空串 →
+    # `_match_head` 的 `if not text` 短路 → 不做鉴权判定 → needs_login=False 且
+    # error="" → exit_code=0 时 `AgentResult.ok` 变成 True（而那个 CLI 其实只说了
+    # 一行「Authentication required」）。
+    #
+    # 这个「独立预算」的真实代价，实测过，不要按「只差一点点」理解：
+    #
+    # * 正常路径**零额外开销** —— 父进程退出即两个管道 EOF，两个 join 都瞬时返回；
+    # * 异常路径最坏 **2 × stream_grace**：两个 reader 虽并行跑，但等的是**同一个
+    #   事件**（EOF）。孙进程活着时两个 pipe 都不会 EOF，两个 join 各自等满自己的
+    #   预算，所以是 sum 不是 max。生产默认 5.0s → 最坏 10.0s（实测 grace=2.0 时
+    #   两侧分别 4.42s / 4.49s）。
+    # * 「两侧同时被占」**不是边角情况**：孙进程 `Popen()` 不重定向时天然继承
+    #   stdout 与 stderr 两个 fd —— 那正是这个宽限期存在的场景本身。
+    # * stderr 的实际捕获窗口是 **grace ~ 2×grace 之间自适应**，不是 grace：err 的
+    #   预算从 `out_reader.join()` **返回之后**才开始算，所以 stdout 那侧被占得越久，
+    #   stderr 的截止时刻越往后延（生产默认即 5s ~ 10s；写成「5 秒之后就没了」会让
+    #   人低估已有保护）。
+    #
+    # 为什么仍然接受这个代价：宽限期只在「孙进程握着写端」时被吃满，而 stderr 判错
+    # 会让整个审计判反方向（假成功没人会去查）。宁可多等 10 秒，也不要一个说
+    # 「成功」的假结果。
     for reader in (out_reader, err_reader):
-        remaining = deadline - time.monotonic()
-        if remaining > 0:
-            reader.join(remaining)
+        reader.join(stream_grace)
 
     stdout_text = strip_ansi(out_reader.data.decode("utf-8", errors="replace"))
     stderr_text = strip_ansi(err_reader.data.decode("utf-8", errors="replace"))
@@ -439,10 +606,16 @@ async def _execute(
     env_overrides: dict[str, str] | None = None,
     stream_grace: float = _STREAM_GRACE,
     on_spawn: Callable[[int], None] | None = None,
+    on_chunk: Callable[[bytes], None] | None = None,
 ) -> tuple[int | None, str, str, bool, bool, str, int | None]:
     """在线程里跑 _execute_blocking，保持调用方是 async 的。
 
-    开销可忽略：真正的工作是子进程在跑，线程只是等它。
+    返回值与 ``_execute_blocking`` 完全一致：
+    ``(exit_code, stdout, stderr, timed_out, truncated, error, pid)``。
+
+    ``on_spawn`` / ``on_chunk`` 原样透传给阻塞实现。注意两个回调都在**工作线程**里
+    被调用，不是事件循环线程；它们必须自己保证线程安全且瞬时返回（阻塞读取线程
+    等于拖慢整条输出收集链路）。
     """
     env = os.environ.copy()
     # 派发出去的 Agent CLI 里也有 Python 实现的（例如 qwenpaw 用自己的 venv）。
@@ -464,6 +637,7 @@ async def _execute(
         env=env,
         stream_grace=stream_grace,
         on_spawn=on_spawn,
+        on_chunk=on_chunk,
     )
 
 
@@ -548,6 +722,26 @@ async def run_agent(
     # 未启用 / 守护进程没跑 / 降级 → 一律 fail-open（放行），派发行为完全不变。
     # 预检是同步 HTTP，扔线程里跑：2 秒超时不该把宿主的事件循环一起卡住。
     block = await asyncio.to_thread(gated_pre_check, config.sentinel, task)
+    runtime = _sentinel_runtime
+    if runtime is not None:
+        # 判定已由 audit 侧完成（它同时支持内置与外部 HTTP 两种后端），这里只记账。
+        # 重复判定的后果不是多花几毫秒，而是把「外部后端拦下了」在账本里写成
+        # 「内置放行」——账做反了比没账更糟。
+        #
+        # 这里**刻意保持同步调用**（本项目唯一的例外）：实测稳态 note_pre_check
+        # 0.37ms、begin_session 0.20ms，合计 0.6ms，低于事件循环的噪声底，包一层
+        # to_thread 只是多一次调度开销。将来谁往这里加逻辑（begin_session 顺手打
+        # 安全点、note_pre_check 改成写全量事件），量级会变 —— 那时必须重新评估，
+        # 而不是照抄旁边的 take_safepoint 写法。
+        runtime.note_pre_check(
+            task,
+            blocked=block is not None,
+            rule_id=getattr(block, "rule_id", "") if block is not None else "",
+            reason=getattr(block, "reason", "") if block is not None else "",
+            evidence=getattr(block, "evidence", "") if block is not None else "",
+            severity=getattr(block, "severity", "red_line") if block is not None else "",
+            agent=spec.id,
+        )
     if block is not None:
         preview = " ".join(redact_argv(argv, task))
         hint = f"（rule_id={block.rule_id}）" if block.rule_id else ""
@@ -573,13 +767,38 @@ async def run_agent(
 
     preview = " ".join(redact_argv(argv, task))
 
+    # —— 会话登记与安全点（都在起进程之前）——
+    # 指纹先按 cwd 定型（此刻还没有 PID），进程拉起之后再用 attach_pid 补进去。
+    # 不这么做就会分裂成两条会话：一条有目标没 PID，一条有 PID 没目标。
+    #
+    # begin_session 同样**刻意保持同步**：实测 0.20ms，与上面的 note_pre_check
+    # 合计 0.6ms，不值得为它多一层线程调度（理由见 note_pre_check 处那段）。
+    fingerprint = ""
+    box_started = 0.0
+    if runtime is not None:
+        fingerprint = runtime.begin_session(cwd=workdir or "", agent=spec.id, goal=task)
+        if workdir:
+            # 安全点内部串行跑多条 git（rev-parse / stash create / status --porcelain），
+            # Windows 冷启动每条 5~15 秒，最坏能到 75 秒。宿主的事件循环是所有插件
+            # 共用的，直接在这里同步调用等于让整个 N.E.K.O 一起卡住，所以丢线程。
+            # 签名保持同步不变（与哨兵的约定），只在调用侧包一层。
+            await asyncio.to_thread(runtime.take_safepoint, workdir, fingerprint=fingerprint)
+        # 时间盒只有内存里的几次比较，没有 I/O，不必进线程。
+        box_started = runtime.timebox_start(label=task[:60])
+
     # 哨兵挂接要在**进程刚起来**时拿到 pid；等 _execute 返回时进程已经退出，
     # 再 attach 只能挂到一具尸体上（这也是上一版最实质的缺陷）。
     attach_client = build_client(config.sentinel) if config.sentinel.attach else None
 
-    def _attach_on_spawn(pid: int) -> None:
+    def _on_spawn(pid: int) -> None:
         if attach_client is not None:
             _attach_in_background(attach_client, cwd=workdir or "", pid=pid, agent=spec.id)
+        if runtime is not None:
+            runtime.attach_pid(fingerprint, pid)
+
+    def _on_chunk(chunk: bytes) -> None:
+        if runtime is not None:
+            runtime.on_output(chunk, fingerprint=fingerprint, agent=spec.id)
 
     started = time.monotonic()
     exit_code, stdout, stderr, timed_out, truncated, error, pid = await _execute(
@@ -588,9 +807,19 @@ async def run_agent(
         timeout=seconds,
         output_limit=config.max_output_bytes,
         env_overrides=override.env or None,
-        on_spawn=_attach_on_spawn if attach_client is not None else None,
+        on_spawn=_on_spawn if (attach_client is not None or runtime is not None) else None,
+        on_chunk=_on_chunk if runtime is not None else None,
     )
     duration_ms = int((time.monotonic() - started) * 1000)
+
+    if runtime is not None:
+        # 时间盒只报警不中断：中断一个正在写代码的 Agent 是不可逆的，
+        # 该不该停由调用方决定，这里只负责把「它已经超了」说清楚。
+        hit = runtime.timebox_check(box_started)
+        if isinstance(hit, dict) and hit.get("level") == "expired":
+            logger.warning("哨兵时间盒已超：%s", hit.get("label") or "任务")
+        # 收尾要 drain 队列、落账本、写时间线，都是阻塞 I/O：同样不能占着事件循环。
+        await asyncio.to_thread(runtime.finish_session, fingerprint, exit_code=exit_code)
 
     # 未登录的 CLI 会「退出码 0 + stderr 一行登录提示」，不特判就会被当成成功，
     # 上层模型拿到的 output 就是那行提示，只能自己猜为什么没干活。

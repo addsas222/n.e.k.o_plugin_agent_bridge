@@ -88,6 +88,55 @@ class SentinelConfig:
     """达到哪个严重度才真的拦：``standard``（默认，含可恢复的高危操作）
     或 ``red_line``（只拦不可逆操作，``rm -rf ./dist`` 这类会放行）。"""
 
+    # —— 账本（store.py）——
+    store_path: str = ""
+    """事件账本（SQLite）路径。留空表示放到插件 data 目录下的 ``sentinel.db``。"""
+    retention_days: int = 30
+    """账本保留天数；超期记录在启动时清理一次。"""
+
+    # —— L2 语义判定（judge.py）——
+    l2_enabled: bool = False
+    """是否启用 L2 语义判定。**默认关闭**——它要调模型、按 token 计费，
+    且模型不可用时会自动降级，不该在用户不知情时产生费用。"""
+    l2_min_interval: float = 20.0
+    """两次 L2 判定的最小间隔（秒），防止逐行触发把模型调用烧穿。"""
+    l2_window: int = 10
+    """每次判定只喂最近多少个动作。"""
+    l2_max_calls_per_hour: int = 120
+    """每小时 L2 调用硬上限。"""
+
+    # —— 干预（guard.py / safepoint.py）——
+    guard_action: str = "alert"
+    """发现危险后的动作：``alert``（只记告警）/ ``terminate``（终止进程树）。
+
+    **默认只告警**：终止不可逆，必须由人显式开启。
+
+    这里**没有** ``suspend``。曾有，但被移除了 —— 理由不是「难实现」，而是
+    挂起的完整语义需要「恢复」这一半，而插件里没有「暂停等人确认」的入口。
+    缺了恢复，「挂起」的实际行为是「把 Agent 冻住，然后什么都不做，直到吃满
+    dispatch timeout 被杀掉」：它比 ``alert`` 糟（没保护住任何东西），也比
+    ``terminate`` 糟（制造「任务莫名变慢」的困惑，日志里看不到干预痕迹）。
+    ``guard.py`` 仍保留 ``suspend``/``resume`` 作为能力，但策略层不再选它。
+
+    老配置文件里若仍写着 ``suspend``，解析时退回默认值 ``alert``，运行时会记
+    一条「已移除，按 alert 处理」—— 不会静默当成 ``terminate``。
+    """
+    safepoint: bool = False
+    """派发前是否打一个安全点（仅 git 工作区，走 ``git stash create``，不动工作区）。
+
+    **默认关闭**：每次派发要串行跑数条 git（本机实测约 940ms，Windows 冷启动更久），
+    并会在目标仓库里留一个 ``refs/sentinel/sp-*`` 引用。这是有真实成本的操作，
+    不该在用户不知情时对每个任务都做。
+    """
+
+    # —— 通知（channels.py）——
+    webhook_url: str = ""
+    """告警 webhook 地址（仅 http/https）。留空则只走本地通道。"""
+
+    # —— 时间盒（timebox.py）——
+    timebox_seconds: float = 0.0
+    """单个任务的时间盒上限（秒）。``0`` 表示关闭。"""
+
 
 @dataclass
 class BridgeConfig:
@@ -106,9 +155,6 @@ class BridgeConfig:
 
     def override_for(self, agent_id: str) -> AgentOverride:
         return self.agents.get(agent_id, AgentOverride())
-
-    def is_enabled(self, agent_id: str) -> bool:
-        return self.override_for(agent_id).enabled
 
     def clamp_timeout(self, value: Any) -> int:
         try:
@@ -223,6 +269,33 @@ def _sentinel_from_dict(raw: dict[str, Any]) -> SentinelConfig:
     severity = raw.get("block_severity")
     if isinstance(severity, str) and severity.strip().lower() in {"standard", "red_line"}:
         cfg.block_severity = severity.strip().lower()
+
+    if isinstance(raw.get("store_path"), str) and raw["store_path"].strip():
+        cfg.store_path = raw["store_path"].strip()
+    if isinstance(raw.get("retention_days"), int) and raw["retention_days"] > 0:
+        cfg.retention_days = raw["retention_days"]
+
+    if isinstance(raw.get("l2_enabled"), bool):
+        cfg.l2_enabled = raw["l2_enabled"]
+    if isinstance(raw.get("l2_min_interval"), (int, float)) and float(raw["l2_min_interval"]) >= 0:
+        cfg.l2_min_interval = float(raw["l2_min_interval"])
+    if isinstance(raw.get("l2_window"), int) and raw["l2_window"] > 0:
+        cfg.l2_window = raw["l2_window"]
+    if isinstance(raw.get("l2_max_calls_per_hour"), int) and raw["l2_max_calls_per_hour"] > 0:
+        cfg.l2_max_calls_per_hour = raw["l2_max_calls_per_hour"]
+
+    action = raw.get("guard_action")
+    if isinstance(action, str) and action.strip().lower() in {"alert", "terminate"}:
+        cfg.guard_action = action.strip().lower()
+    if isinstance(raw.get("safepoint"), bool):
+        cfg.safepoint = raw["safepoint"]
+
+    if isinstance(raw.get("webhook_url"), str) and raw["webhook_url"].strip():
+        cfg.webhook_url = raw["webhook_url"].strip()
+
+    if isinstance(raw.get("timebox_seconds"), (int, float)) and float(raw["timebox_seconds"]) >= 0:
+        cfg.timebox_seconds = float(raw["timebox_seconds"])
+
     return cfg
 
 

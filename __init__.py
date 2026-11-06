@@ -19,8 +19,9 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
+import time
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, Callable
 
 _STANDALONE = not __package__
 """True = 本文件被当作**独立模块**导入，而不是包的一部分。
@@ -76,7 +77,7 @@ try:  # 包上下文（宿主把本仓库挂载成 agent_bridge 包）
         list_specs,
         resolve_agent,
     )
-    from .bridge.runner import probe_version, run_agent
+    from .bridge.runner import probe_version, run_agent, set_sentinel_runtime
     from .bridge.tools import format_agent_result, write_audit
 except ImportError:  # 独立模块（pytest 推导模块名时）—— 兄弟包从仓库根解析
     from bridge.audit import status_snapshot
@@ -89,7 +90,7 @@ except ImportError:  # 独立模块（pytest 推导模块名时）—— 兄弟�
         list_specs,
         resolve_agent,
     )
-    from bridge.runner import probe_version, run_agent
+    from bridge.runner import probe_version, run_agent, set_sentinel_runtime
     from bridge.tools import format_agent_result, write_audit
 
 
@@ -102,8 +103,18 @@ _AGENT_IDS = [spec.id for spec in list_specs()]
 _AGENT_HINT = "、".join(_AGENT_IDS)
 
 
-def _json_dumps(data: Any) -> str:
-    return json.dumps(data, ensure_ascii=False)
+def _load_panel_module() -> Any:
+    """延迟导入面板模块（``build_panel_state`` / ``degraded_state`` 都在里面）。
+
+    刻意不做顶层 eager import：``__init__.py`` 顶部那段
+    ``try/except ImportError`` 是「哨兵没启用也必须能启动插件」的结构保障，
+    往里塞一个新模块等于给启动路径多加一个失败点，而面板只是展示层。
+    """
+    try:
+        from .bridge.sentinel_core import panel as module
+    except ImportError:  # 独立模块导入（pytest 推导模块名时）
+        from bridge.sentinel_core import panel as module
+    return module
 
 
 @neko_plugin
@@ -111,23 +122,89 @@ class AgentBridgePlugin(NekoPluginBase):
     """把本机 Agent CLI 桥接成 N.E.K.O 入口与对话工具。"""
     @ui.context(id="agent_bridge_panel")
     async def _ui_panel_state(self):
-        """Hosted 面板状态：插件元信息 + 入口清单。
+        """Hosted 面板状态。
 
-        入口清单**从 SDK 真元数据生成**（``self.list_entries()`` 读的是各入口的
-        ``EventMeta``），不再手抄一份。手抄那份已经漂移过：``agent_run`` 的
-        description 是空串（真入口有一长串说明，告诉模型有哪些 Agent 可选），
-        而 ``has_required`` 一律写 True —— ``agents_list`` / ``agent_doctor``
-        其实任何参数都不必填，面板因此把它们渲染成带必填星号的表单。
+        聚合逻辑全部在 ``bridge/sentinel_core/panel.py``：写在这里就永远测不到
+        （本仓库的测试从不实例化插件类，见 ``tests/_sdk_stub.py``）。这个函数只负责
+        三件事：把宿主侧的元信息塞进去、丢进线程跑、兜住任何漏网异常。
+
+        **为什么必须 to_thread**：账本查询是同步 SQLite，直接在协程里跑会阻塞事件循环。
+
+        **为什么外面还要再包一层 try**：``build_panel_state`` 内部对每个数据源都降级了，
+        但它自己也可能整段炸（拼装 bug、传入奇怪类型）。这个返回值直接进 ``props.state``，
+        抛出去就是整个面板白屏 —— 用户会以为插件坏了，实际只是数据层某个分支写错。
+        面板不该成为新的故障点：审计数据看不到是次要的，连「点按钮派活」都做不了才是主要的。
         """
-        return {
-            'plugin': {
-                'id': 'agent_bridge',
-                'name': 'Agent 桥接',
-                'version': '0.2.2',
-                'description': '把本机编码 Agent CLI 桥接成 N.E.K.O 运行时入口(生成面板:入口清单)。',
-            },
-            'entries': self._entry_rows(),
+        plugin = {
+            'id': 'agent_bridge',
+            'name': 'Agent 桥接',
+            'version': '0.5.0',  # 与 plugin.toml 的 version 手工保持一致，改一处要改两处
+            'description': '把本机编码 Agent CLI 桥接成 N.E.K.O 运行时入口(哨兵面板)。',
         }
+        # 入口清单从 SDK 真元数据生成（``self.list_entries()`` 读的是各入口的
+        # ``EventMeta``），不手抄。手抄那份已经漂移过：``agent_run`` 的 description
+        # 是空串（真入口有一长串说明，告诉模型有哪些 Agent 可选），而
+        # ``has_required`` 一律写 True —— ``agents_list`` / ``agent_doctor`` 其实任何
+        # 参数都不必填，面板因此把它们渲染成带必填星号的表单。
+        try:
+            entries = self._entry_rows()
+        except Exception as exc:  # noqa: BLE001 —— 入口清单不该拖垮面板
+            self._log('warning', f'读取入口清单失败，面板将以空清单降级：{exc!r}')
+            entries = []
+        if not isinstance(entries, list):
+            entries = []
+
+        runtime = self._sentinel
+        store = getattr(runtime, 'store', None)
+        started = time.perf_counter()
+
+        # 干预动作来自配置（sentinel.guard_action），doctor() 里没有这个值。
+        # 单独兜一层：读不到配置只让这一个字段显示「未知」，不该把整个面板打进降级态
+        # —— 配置文件的 IO 失败和「数据层拼装失败」是两件严重程度不同的事。
+        guard_action = ''
+        try:
+            config = await self._config()
+            guard_action = str(getattr(config.sentinel, 'guard_action', '') or '')
+        except Exception as exc:  # noqa: BLE001
+            self._log('warning', f'读取配置失败，干预动作显示为未知：{exc!r}')
+
+        # 面板模块只在这里用一次：它同时提供正常聚合与降级骨架，所以先拿到模块本身，
+        # 不要一次只取一个函数 —— 降级路径还需要它。
+        panel_module = None
+        try:
+            panel_module = _load_panel_module()
+            partial = await asyncio.to_thread(
+                panel_module.build_panel_state,
+                store,
+                sentinel=runtime,
+                plugin=plugin,
+                entries=entries,
+                guard_action=guard_action,
+            )
+            if not isinstance(partial, dict):
+                raise TypeError(f'build_panel_state 返回了 {type(partial).__name__}，期望 dict')
+            state = dict(partial)
+            state['elapsed_ms'] = round((time.perf_counter() - started) * 1000.0, 1)
+            return state
+        except Exception as exc:  # noqa: BLE001
+            self._log('warning', f'面板状态生成失败，已降级：{exc!r}')
+            elapsed_ms = round((time.perf_counter() - started) * 1000.0, 1)
+            if panel_module is not None:
+                try:
+                    return panel_module.degraded_state(
+                        plugin,
+                        entries,
+                        # 配置读到了就照实显示干预动作：它和「数据层挂了」是两回事，
+                        # 用户在降级态下仍然有权知道「命中红线会不会真杀我进程」。
+                        guard_action=guard_action,
+                        elapsed_ms=elapsed_ms,
+                    )
+                except Exception as exc2:  # noqa: BLE001
+                    self._log('warning', f'降级态构造失败，只返回入口清单：{exc2!r}')
+            # 连 panel 模块都导不进来（理论上只有包结构被破坏时）：给最小的可用集合。
+            # 不再在这里手抄一份完整形状 —— 那份字面量曾经和 panel.py 各写一遍，
+            # 加了 stats.partial 之后当场漂了。前端对缺失字段本来就有兜底。
+            return {'plugin': plugin, 'entries': entries, 'elapsed_ms': elapsed_ms}
 
     def _entry_rows(self) -> list[dict[str, Any]]:
         """把 SDK 的入口元数据整理成面板要用的字段。
@@ -184,6 +261,11 @@ class AgentBridgePlugin(NekoPluginBase):
         # 于是记录下来：后续直接拦下，别再让模型一次次挑中同一台没登录的机器。
         # 跑成功一次就自动摘掉（用户可能刚登录完）。
         self._needs_login: set[str] = set()
+        # 哨兵运行时（安全审计）。未启用时它是个「每个方法都立刻返回」的空壳，
+        # 派发路径不会因此多出一次分支判断之外的开销。
+        # 类型标 Any 而不是 SentinelRuntime：那个类在 on_startup 里才导入（见那里的说明），
+        # 这里写具体类型会让文件顶部又需要一个 eager import。
+        self._sentinel: Any = None
 
     # ------------------------------------------------------------------ 基础
 
@@ -269,6 +351,48 @@ class AgentBridgePlugin(NekoPluginBase):
             self._bridge_config = config
             return config
 
+    def _data_dir(self) -> Path:
+        """插件数据目录 —— 账本这类运行期状态放这里，不进源码包。"""
+        try:
+            return Path(str(self.data_path("sentinel.db"))).parent
+        except Exception:  # noqa: BLE001
+            return Path.cwd() / "data"
+
+    def _make_judge_fn(self, config: BridgeConfig) -> Callable[[str], str] | None:
+        """构造 L2 判定用的模型回调。
+
+        ``SemanticJudge`` 是同步的（跑在哨兵线程上），而宿主网关是 async，所以
+        每次调用起一个临时事件循环。哨兵线程本身没有运行中的 loop，``asyncio.run``
+        在那里是安全的；反过来如果在事件循环线程里调它，会抛 RuntimeError，
+        被 ``SemanticJudge`` 接住并降级 —— 也不会连累 L1。
+
+        未绑槽位（403）、未声明（403）、能力不匹配（409）都只是一次降级，
+        不是致命错误：L2 本来就可以缺省。
+        """
+        if not getattr(config.sentinel, "l2_enabled", False):
+            return None
+        models = getattr(getattr(self, "ctx", None), "models", None)
+        if models is None:
+            return None
+
+        def _judge(prompt: str) -> str:
+            async def _call() -> str:
+                client = await models.get_client()
+                response = await client.chat.completions.create(
+                    model="judge",
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0.0,
+                )
+                choices = getattr(response, "choices", None) or []
+                if not choices:
+                    return ""
+                message = getattr(choices[0], "message", None)
+                return str(getattr(message, "content", "") or "")
+
+            return asyncio.run(_call())
+
+        return _judge
+
     def _audit(self, config: BridgeConfig, record: dict[str, Any]) -> None:
         try:
             write_audit(config, record)
@@ -305,15 +429,59 @@ class AgentBridgePlugin(NekoPluginBase):
             override = config.override_for(spec.id)
             if override.enabled and resolve_agent(spec, override.exe_override).exists:
                 ready += 1
+
+        # 哨兵运行时。**整体包在 try 里**：审计是增强层，它起不来绝不能让桥接起不来。
+        sentinel_note = "，哨兵 关"
+        # 导入推迟到这里，不是随手为之：哨兵默认关闭，绝大多数用户用不到这一整包
+        # （sqlite3 + urllib.request + http.server + ctypes 实测约 425ms）。放在文件
+        # 顶部的 eager import 会让「默认关闭」变成一句空话，更糟的是原来那句
+        # `try: import / except ImportError: 无哨兵` 会把「模块里真有语法错误」
+        # 伪装成「这台机器不支持哨兵」—— 静默降级比崩溃更难查。
+        # 现在导入失败会落进下面的 except，作为一条 warning 出来。
+        try:
+            # 导入本身也在 try 里：兜底那句 `from bridge.sentinel_core import ...`
+            # 在独立模块布局下同样可能抛 ImportError，而它一旦穿出 on_startup，
+            # 后果不是「哨兵退回关闭态」而是「整个插件启动失败」—— 审计是增强层，
+            # 绝不该有这种权力。外层 except 兜住导入，异常一律降级成一条 warning。
+            try:
+                from .bridge.sentinel_core import SentinelRuntime
+            except ImportError:  # 独立模块布局（pytest 推导模块名时）
+                from bridge.sentinel_core import SentinelRuntime
+            runtime = SentinelRuntime(
+                config.sentinel,
+                judge_fn=self._make_judge_fn(config),
+                data_dir=self._data_dir(),
+            )
+            set_sentinel_runtime(runtime)
+            self._sentinel = runtime
+            if runtime.enabled:
+                info = runtime.doctor()
+                parts = ["L2 " + ("开" if info["l2"]["enabled"] else "关")]
+                parts.append("账本 " + ("开" if info["store"]["ok"] else "关"))
+                parts.append("干预 " + str(config.sentinel.guard_action))
+                sentinel_note = "，哨兵 开（" + "，".join(parts) + "）"
+        except Exception as exc:  # noqa: BLE001 —— 审计起不来就退回关闭态
+            self._log("warning", f"哨兵运行时初始化失败，已退回关闭态：{exc!r}")
+            set_sentinel_runtime(None)
+
         self._log(
             "info",
             f"本机 Agent 桥接就绪：{ready}/{len(_AGENT_IDS)} 个 Agent 可用"
-            f"（默认超时 {config.default_timeout_seconds}s，审计 {config.audit_log or '关闭'}）",
+            f"（默认超时 {config.default_timeout_seconds}s，审计 {config.audit_log or '关闭'}{sentinel_note}）",
         )
         return Ok({"ready": ready, "total": len(_AGENT_IDS)})
 
     @lifecycle(id="shutdown")
     async def on_shutdown(self, **_):
+        # 摘掉运行时再关账本：派发可能是并发进行的，先让新调用看到 None
+        set_sentinel_runtime(None)
+        if self._sentinel is not None:
+            try:
+                self._sentinel.flush_alerts()
+                self._sentinel.close()
+            except Exception as exc:  # noqa: BLE001
+                self._log("warning", f"哨兵收尾失败（已忽略）：{exc!r}")
+            self._sentinel = None
         self._log("info", "本机 Agent 桥接停止")
         return Ok({"status": "stopped"})
 
@@ -753,3 +921,126 @@ class AgentBridgePlugin(NekoPluginBase):
             "error": result.error,
             "retry_with": self._ready_agents(config) if result.needs_login else [],
         }
+
+    # ------------------------------------------------------------ 哨兵审计
+
+    @ui.action(label="哨兵状态", refresh_context=True)
+
+    @plugin_entry(
+        id="sentinel_status",
+        name="哨兵状态",
+        description="查看安全审计各层的状态（L1/L2、账本、干预、告警、时间盒）与近期统计。",
+        timeout=_ENTRY_TIMEOUT,
+        llm_result_fields=["summary", "layers"],
+    )
+    async def sentinel_status(self, **_):
+        runtime = self._sentinel
+        if runtime is None:
+            return Err(SdkError("哨兵运行时未初始化（插件尚未完成启动，或初始化时出错）"))
+        info = await asyncio.to_thread(runtime.doctor)
+        layers = {
+            "l1": True,
+            "l2": bool(info["l2"].get("enabled")),
+            "store": bool(info["store"].get("ok")),
+            "guard": str((await self._config()).sentinel.guard_action),
+            "webhook": bool(info["webhook"].get("configured")),
+            "timebox_seconds": float(info["timebox"].get("seconds") or 0.0),
+        }
+        if not info["enabled"]:
+            summary = "哨兵未启用（见 README「Sentinel 安全审计集成」）"
+        else:
+            parts = [
+                "L2 " + ("开" if layers["l2"] else "关"),
+                "账本 " + ("开" if layers["store"] else "关"),
+                "干预 " + layers["guard"],
+                "告警 " + ("webhook" if layers["webhook"] else "仅本地"),
+            ]
+            dropped = int(info.get("dropped_events") or 0)
+            if dropped:
+                parts.append(f"丢弃事件 {dropped}")
+            # 解析失败数只在非零时出现：0 是常态，常驻一个「解析失败 0」会让这一行
+            # 变成噪声，而真正非零时就淹在固定文本里看不见了。
+            # 它衡量的是「适配器有没有坏」——坏掉时所有结构化字段会静默变空，
+            # 账本里只留下「输出本来就长这样」的假象。
+            parse_failed = int((info.get("parse") or {}).get("failures") or 0)
+            if parse_failed:
+                parts.append(f"解析失败 {parse_failed}")
+            summary = "哨兵已启用：" + "，".join(parts)
+        return Ok({"summary": summary, "layers": layers, "detail": info})
+
+    @ui.action(label="案发时间线", refresh_context=True)
+
+    @plugin_entry(
+        id="sentinel_timeline",
+        name="案发时间线",
+        description="把最近的事件串成时间线，回答「它是怎么一步步走到这一步的」。",
+        timeout=_ENTRY_TIMEOUT,
+        llm_result_fields=["summary", "timeline"],
+    )
+    async def sentinel_timeline(
+        self,
+        hours: Annotated[float, "往前看多少小时"] = 12.0,
+        session: Annotated[str, "只看某一路会话指纹（留空看全部）"] = "",
+        **_,
+    ):
+        runtime = self._sentinel
+        if runtime is None:
+            return Err(SdkError("哨兵运行时未初始化"))
+        since = time.time() - max(0.1, float(hours)) * 3600
+        text = await asyncio.to_thread(runtime.timeline, since=since, fingerprint=session)
+        lines = [line for line in text.splitlines() if line.strip()]
+        return Ok(
+            {
+                "summary": lines[0] if lines else "（这段时间没有记录）",
+                "timeline": text,
+                "lines": len(lines),
+            }
+        )
+
+    @ui.action(label="夜间值守晨报", refresh_context=True)
+
+    @plugin_entry(
+        id="sentinel_briefing",
+        name="夜间值守晨报",
+        description="聚合最近一段时间的事件，给出一份早上能直接读的安全摘要。",
+        timeout=_ENTRY_TIMEOUT,
+        llm_result_fields=["summary", "briefing"],
+    )
+    async def sentinel_briefing(
+        self,
+        hours: Annotated[float, "往前看多少小时（夜里挂机建议 12）"] = 12.0,
+        **_,
+    ):
+        runtime = self._sentinel
+        if runtime is None:
+            return Err(SdkError("哨兵运行时未初始化"))
+        text = await asyncio.to_thread(runtime.briefing, hours=float(hours))
+        lines = [line for line in text.splitlines() if line.strip()]
+        return Ok({"summary": lines[0] if lines else "", "briefing": text})
+
+    @ui.action(label="回滚到安全点", refresh_context=True)
+
+    @plugin_entry(
+        id="sentinel_rollback",
+        name="回滚到安全点",
+        description="把工作区恢复到最近一个安全点（派发前打的 git 快照）。不可逆，请确认后再调用。",
+        timeout=_ENTRY_TIMEOUT,
+        llm_result_fields=["summary"],
+    )
+    async def sentinel_rollback(
+        self,
+        session: Annotated[str, "会话指纹（留空取全局最近一个安全点）"] = "",
+        cwd: Annotated[str, "工作目录（留空用默认工作目录）"] = "",
+        **_,
+    ):
+        runtime = self._sentinel
+        if runtime is None:
+            return Err(SdkError("哨兵运行时未初始化"))
+        config = await self._config()
+        workdir = config.resolve_cwd(cwd or None)
+        if not workdir:
+            return Err(SdkError("没有可回滚的工作目录：请显式给出 cwd"))
+        ok = await asyncio.to_thread(runtime.rollback, workdir, fingerprint=session)
+        if not ok:
+            return Err(SdkError("回滚失败：没有可用安全点，或该目录不是 git 仓库"))
+        return Ok({"summary": f"已回滚到安全点：{workdir}", "cwd": workdir})
