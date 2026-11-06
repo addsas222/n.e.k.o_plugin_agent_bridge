@@ -509,7 +509,10 @@ class ProcessGuard:
         #: 指纹表满且全是活进程时的降级提示是否已打过。
         self._table_full_warned = False
         #: 上次扫描「死记录」的时刻（限频用，见 ``_evict_dead``）。
-        self._evict_scan_at = 0.0
+        # 同 `safepoint._last_prune`：`time.monotonic()` 的零点是开机时刻，用 0.0 当
+        # 「从没扫过」会让刚开机的机器（CI runner）在头 `_EVICT_SCAN_INTERVAL` 秒内
+        # 把第一次淘汰扫描节流掉 —— 表一满就拒绝登记，而拒绝的理由还是「刚扫过」。
+        self._evict_scan_at = float("-inf")
         #: 保护 ``_identities`` 的登记/腾位/淘汰。干预动作可能来自后台线程
         #: （见 ``runtime`` 的 intervene 线程），而「查容量 → 取指纹 → 写入」这三步
         #: 中间会被别的线程插入；不加锁的话容量上限只是「大致不超过」。

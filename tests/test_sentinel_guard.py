@@ -190,8 +190,11 @@ def test_suspend_resume_then_terminate_real_child():
         assert guard.is_alive(child.pid) is True
 
         assert guard.terminate(child.pid, grace=5.0) is True
-        assert guard.is_alive(child.pid) is False
+        # **必须先收尸再断言**：POSIX 上被杀的子进程先是僵尸，而 `guard.is_alive`
+        # 对僵尸返回 True（它 docstring 里写明这是有意的取舍 —— 信号还能发进去）。
+        # 先断言「已经死了」在 Linux 上会稳定假红，而 Windows 没有僵尸态，看不出区别。
         assert child.wait(timeout=10) is not None
+        assert guard.is_alive(child.pid) is False
     finally:
         # 无论上面哪一步失败，都不许留下一个占着 30 秒的 sleep 进程。
         if child.poll() is None:
@@ -209,6 +212,8 @@ def test_terminate_works_on_suspended_process():
     try:
         assert guard.suspend(child.pid) is True
         assert guard.terminate(child.pid, grace=5.0) is True
+        # 同上：先 wait() 收尸，再判存活。没收尸的僵尸在 POSIX 上仍算「活着」。
+        child.wait(timeout=10)
         assert guard.is_alive(child.pid) is False
     finally:
         if child.poll() is None:

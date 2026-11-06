@@ -655,3 +655,21 @@ def test_capabilities_closes_probe_handle(monkeypatch):
     assert caps["terminate"] is True
     assert fake.opened == 1
     assert fake.closed == fake.opened, "探活句柄没关：每调一次 capabilities() 就漏一个"
+
+
+def test_evict_scans_on_fresh_boot(monkeypatch):
+    """刚开机时第一次淘汰扫描也必须真的跑，不能因为 `monotonic()` 小就被节流。
+
+    与 ``safepoint._last_prune`` 同一个病因：``0.0`` 被当成「从没扫过」，而
+    ``time.monotonic()`` 的零点是开机时刻。CI runner 刚启动时 uptime 可能只有几十秒，
+    于是表满后的第一次扫描被节流掉、新 pid 被拒登记，而拒绝理由还写着「刚扫过」。
+    """
+    guard = ProcessGuard()
+    guard._identities = {424242: ("starttime", "x")}
+    monkeypatch.setattr(guard, "is_alive", lambda pid: False)
+    monkeypatch.setattr(guard_module.time, "monotonic", lambda: 5.0)
+
+    evicted, scanned = guard._evict_dead()
+
+    assert scanned is True, "开机 5 秒时第一次 _evict_dead 被节流了（`_evict_scan_at = 0.0` 的错）"
+    assert evicted == 424242, f"死进程的记录应该被淘汰，实际 {evicted!r}"

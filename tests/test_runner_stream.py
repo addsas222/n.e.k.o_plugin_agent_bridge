@@ -106,11 +106,16 @@ if len(sys.argv) > 1 and sys.argv[1] == "--grandchild":
 
 # 孙进程不重定向任何东西，于是它继承了这两个管道的写端
 subprocess.Popen([sys.executable, __file__, "--grandchild"])
-# 正文故意写成「可识别的进度形态」（``working…``）：判据是形态，不是长度。
+# 正文故意写成「可识别的进度形态」（``working...``）：判据是形态，不是长度。
 # 用一句真实结论会让鉴权判定被正确地跳过，本用例就会因为另一个原因通过，
 # 掩盖真正要测的「stderr 有没有被截断」。
-# 注意本模板要过 ``str.format``，注释里不能出现未转义的花括号。
-print("working…")
+# **载荷必须是 ASCII**：子进程按平台默认编码写管道（Windows CI 上是 cp1252），
+# 父进程按 UTF-8 解码 —— 一个真正的省略号字符会变成 U+FFFD，进度形态就失配，
+# 于是这行被当成「实质产出」、needs_login 判成 False。
+# 判据本身两种省略号都收（见 `runner._PROGRESS_RE` 的省略号分支），
+# 这里用三个点只是不让「测试载荷的编码」变成被测对象。
+# 注意本模板要过 `str.format`，注释里既不能有未转义的花括号，也不要有反斜杠。
+print("working...")
 '''
 
 

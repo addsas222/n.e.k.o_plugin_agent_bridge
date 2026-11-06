@@ -136,7 +136,11 @@ class SafePointManager:
         self.git = _find_git()
         # 上次自动清理的时刻（单调时钟）。0 表示还没清理过 —— 第一次 create 会顺手
         # 收一遍历史 ref（长期使用后仓库里会攒下成百上千个 refs/sentinel/*）。
-        self._last_prune = 0.0
+        # **不能用 0.0 当「从没清理过」**：这里比较的是 `time.monotonic()`，它的零点
+        # 是**开机时刻**，不是进程启动时刻。刚开机的机器（CI runner 就是）uptime 可能
+        # 小于 `_PRUNE_INTERVAL`，于是第一次 create 就被当成「刚清理过」而跳过 ——
+        # 自动清理在机器开机的头一小时里静默失效。用 -inf 保证第一次一定跑。
+        self._last_prune = float("-inf")
         if not self.git:
             logger.debug("未找到 git，安全点功能降级为不可用")
 

@@ -166,7 +166,9 @@ def test_create_prunes_at_most_once_per_interval(tmp_path, monkeypatch):
     assert len(calls) == 1, "同一次进程里两次 create 只该清理一次"
 
     # 把节流时间戳清零 → 下一次 create 又会清理。
-    manager._last_prune = 0.0
+    # 清成 `-inf` 而不是 `0.0`：节流比的是 `time.monotonic()`，它的零点是**开机时刻**，
+    # 刚开机的机器（CI runner）上 `now` 可能小于间隔，`0.0` 会被当成「刚清理过」。
+    manager._last_prune = float("-inf")
     manager.create(str(repo))
     assert len(calls) == 2
 
@@ -196,6 +198,31 @@ def test_prune_actually_runs_on_first_create(tmp_path):
 
     assert point is not None
     assert stale not in _refs(repo), "过期 ref 应该在建安全点时被回收"
+
+
+
+def test_first_prune_runs_even_on_fresh_boot(tmp_path, monkeypatch):
+    """刚开机的机器上，第一次 ``_maybe_prune`` 也必须真的清理。
+
+    节流比的是 ``time.monotonic()``，而它的零点是**开机时刻**、不是进程启动时刻。
+    用 ``0.0`` 当「从没清理过」时，刚开机的机器（CI runner 就是）uptime 小于
+    ``_PRUNE_INTERVAL``（1 小时），于是第一次 create 被判成「刚清理过」而跳过 ——
+    自动清理在开机的头一小时里静默失效。这里把时钟钉在 5 秒，钉住修复。
+
+    只测节流判定（``prune`` 被替身接住），不起 git 子进程：这条要防的是「时钟域用错」，
+    不是 git 行为。
+    """
+    manager = SafePointManager()
+    calls: list[str | None] = []
+    monkeypatch.setattr(SafePointManager, "prune", lambda self, cwd=None, **kw: calls.append(cwd) or 0)
+    monkeypatch.setattr(safepoint_module.time, "monotonic", lambda: 5.0)
+
+    manager._maybe_prune(tmp_path)
+
+    assert calls, (
+        "开机 5 秒时第一次 _maybe_prune 被节流了 —— 这就是 `_last_prune = 0.0` 的错："
+        "monotonic 的零点不是进程起点。"
+    )
 
 
 if __name__ == "__main__":  # pragma: no cover
